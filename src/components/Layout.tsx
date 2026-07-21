@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useDratsEngine } from '../hooks/useDratsEngine'
 import { SerialConnect } from './SerialConnect'
 import { ChatPanel } from './ChatPanel'
 import { MapPanel } from './MapPanel'
@@ -7,22 +8,51 @@ import { StationsList } from './StationsList'
 import { EventLog } from './EventLog'
 import { ConfigPanel } from './ConfigPanel'
 
-const TABS = [
-  { id: 'radio', label: 'Radio', component: SerialConnect },
-  { id: 'chat', label: 'Chat', component: ChatPanel },
-  { id: 'map', label: 'Map', component: MapPanel },
-  { id: 'files', label: 'Files', component: FileTransfer },
-  { id: 'stations', label: 'Stations', component: StationsList },
-  { id: 'events', label: 'Events', component: EventLog },
-  { id: 'config', label: 'Config', component: ConfigPanel },
-] as const
+interface TabDef {
+  id: string
+  label: string
+}
 
-type TabId = (typeof TABS)[number]['id']
+const TABS: TabDef[] = [
+  { id: 'radio', label: 'Radio' },
+  { id: 'chat', label: 'Chat' },
+  { id: 'map', label: 'Map' },
+  { id: 'files', label: 'Files' },
+  { id: 'stations', label: 'Stations' },
+  { id: 'events', label: 'Events' },
+  { id: 'config', label: 'Config' },
+]
 
 export function Layout() {
-  const [activeTab, setActiveTab] = useState<TabId>('radio')
+  const [activeTab, setActiveTab] = useState('radio')
+  const { serialRef, onSerialConnected, onSerialDisconnected } = useDratsEngine()
 
-  const ActiveComponent = TABS.find((t) => t.id === activeTab)?.component ?? SerialConnect
+  const renderContent = () => {
+    switch (activeTab) {
+      case 'radio':
+        return (
+          <SerialConnect
+            serial={serialRef}
+            onConnected={onSerialConnected}
+            onDisconnected={onSerialDisconnected}
+          />
+        )
+      case 'chat':
+        return <ChatPanel />
+      case 'map':
+        return <MapPanel />
+      case 'files':
+        return <FileTransfer />
+      case 'stations':
+        return <StationsList />
+      case 'events':
+        return <EventLog />
+      case 'config':
+        return <ConfigPanel />
+      default:
+        return null
+    }
+  }
 
   return (
     <div className="app-layout">
@@ -43,9 +73,7 @@ export function Layout() {
           ))}
         </ul>
       </nav>
-      <main className="main-content">
-        <ActiveComponent />
-      </main>
+      <main className="main-content">{renderContent()}</main>
     </div>
   )
 }

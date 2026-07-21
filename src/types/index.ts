@@ -6,12 +6,13 @@ export interface Station {
   port?: string
 }
 
-export enum StationStatus {
-  Unknown = 0,
-  Online = 1,
-  Unattended = 2,
-  Offline = 9,
-}
+export const StationStatus = {
+  Unknown: 0,
+  Online: 1,
+  Unattended: 2,
+  Offline: 9,
+} as const
+export type StationStatus = (typeof StationStatus)[keyof typeof StationStatus]
 
 export interface GPSPosition {
   lat: number
@@ -45,16 +46,17 @@ export interface DDT2Header {
 
 export interface DDT2Frame {
   header: DDT2Header
-  data: ArrayBuffer
+  data: Uint8Array
 }
 
-export enum SessionType {
-  Stateless = 0,
-  General = 1,
-  FileTransfer = 5,
-  FormTransfer = 6,
-  RPC = 7,
-}
+export const SessionType = {
+  Stateless: 0,
+  General: 1,
+  FileTransfer: 5,
+  FormTransfer: 6,
+  RPC: 7,
+} as const
+export type SessionType = (typeof SessionType)[keyof typeof SessionType]
 
 export interface FileTransferItem {
   id: string

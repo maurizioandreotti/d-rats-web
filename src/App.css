@@ -544,3 +544,22 @@ ol li {
   color: var(--text);
   margin-bottom: 6px;
 }
+
+.debug-data {
+  margin: 12px 0;
+  padding: 10px;
+  background: var(--code-bg, #1a1b23);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.debug-data p {
+  margin: 2px 0;
+}
+
+.debug-data .mono {
+  font-family: var(--mono);
+  font-size: 11px;
+  word-break: break-all;
+}

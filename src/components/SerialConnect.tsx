@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { RadioSerial } from '../engine/serial'
 import type { RadioSerialConfig } from '../engine/serial'
 import { useConfigStore } from '../store/config-store'
@@ -11,11 +11,28 @@ interface SerialConnectProps {
 
 export function SerialConnect({ serial, onConnected, onDisconnected }: SerialConnectProps) {
   const { config, updateConfig } = useConfigStore()
-  const [connected, setConnected] = useState(false)
+  const instance = serial.current
+  const [connected, setConnected] = useState(() => instance?.isConnected ?? false)
   const [connecting, setConnecting] = useState(false)
-  const [status, setStatus] = useState('Not connected')
-  const [portInfo, setPortInfo] = useState<{ usbVendorId?: number; usbProductId?: number } | null>(null)
+  const [status, setStatus] = useState(() => {
+    return instance?.isConnected ? `Connected at ${config.serial.baudRate} baud` : 'Not connected'
+  })
+  const [portInfo, setPortInfo] = useState<{ usbVendorId?: number; usbProductId?: number } | null>(
+    () => instance?.portInfo ?? null,
+  )
   const [baudRate, setBaudRate] = useState(config.serial.baudRate)
+  const [bytesReceived, setBytesReceived] = useState(0)
+  const [lastHex, setLastHex] = useState('')
+  const dataRef = useRef<RadioSerial | null>(instance)
+
+  useEffect(() => {
+    const inst = serial.current
+    if (inst && inst.isConnected) {
+      setConnected(true)
+      setStatus(`Connected at ${baudRate} baud`)
+      setPortInfo(inst.portInfo)
+    }
+  }, [serial, baudRate])
 
   const handleConnect = useCallback(async () => {
     try {
@@ -23,13 +40,23 @@ export function SerialConnect({ serial, onConnected, onDisconnected }: SerialCon
       setStatus('Requesting serial port...')
 
       const port = await RadioSerial.requestPort()
-      const instance = new RadioSerial()
+      const inst = new RadioSerial()
 
-      instance.setOnDisconnect(() => {
+      inst.setOnDisconnect(() => {
         setConnected(false)
         setStatus('Disconnected')
         setPortInfo(null)
         onDisconnected?.()
+      })
+
+      inst.setOnData((data) => {
+        setBytesReceived((prev) => prev + data.length)
+        if (data.length > 0) {
+          const hex = Array.from(data.slice(0, 16))
+            .map((b) => b.toString(16).padStart(2, '0'))
+            .join(' ')
+          setLastHex(hex)
+        }
       })
 
       const serialConfig: RadioSerialConfig = {
@@ -39,12 +66,15 @@ export function SerialConnect({ serial, onConnected, onDisconnected }: SerialCon
         parity: 'none',
       }
 
-      await instance.connect(port, serialConfig)
+      await inst.connect(port, serialConfig)
 
-      serial.current = instance
+      serial.current = inst
+      dataRef.current = inst
       setConnected(true)
       setStatus(`Connected at ${baudRate} baud`)
       setPortInfo(port.getInfo())
+      setBytesReceived(0)
+      setLastHex('')
       updateConfig({ serial: { ...config.serial, baudRate } })
       onConnected?.()
     } catch (err) {
@@ -56,10 +86,11 @@ export function SerialConnect({ serial, onConnected, onDisconnected }: SerialCon
   }, [baudRate, serial, config.serial, updateConfig, onConnected, onDisconnected])
 
   const handleDisconnect = useCallback(async () => {
-    const instance = serial.current
-    if (instance) {
-      await instance.disconnect()
+    const inst = serial.current
+    if (inst) {
+      await inst.disconnect()
       serial.current = null
+      dataRef.current = null
     }
     setConnected(false)
     setStatus('Disconnected')
@@ -102,6 +133,13 @@ export function SerialConnect({ serial, onConnected, onDisconnected }: SerialCon
           </div>
         )}
 
+        {connected && (
+          <div className="debug-data">
+            <p>Bytes received: {bytesReceived}</p>
+            {lastHex && <p className="mono">Last bytes: {lastHex}</p>}
+          </div>
+        )}
+
         <div className="button-row">
           {!connected ? (
             <button className="btn btn-primary" onClick={handleConnect} disabled={connecting}>
@@ -127,6 +165,12 @@ export function SerialConnect({ serial, onConnected, onDisconnected }: SerialCon
           Note: Web Serial API requires Chrome or Edge. The browser will prompt you to
           select the serial port.
         </p>
+        {connected && (
+          <p className="note">
+            Debug: If no data appears above, the radio may need DTR/RTS. Try power-cycling the
+            radio or checking the USB cable connection.
+          </p>
+        )}
       </div>
     </div>
   )

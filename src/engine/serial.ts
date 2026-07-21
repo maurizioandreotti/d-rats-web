@@ -26,12 +26,19 @@ interface SerialOptions {
   bufferSize?: number
 }
 
+interface SerialOutputSignals {
+  dataTerminalReady?: boolean
+  requestToSend?: boolean
+  break?: boolean
+}
+
 interface SerialPort {
   readonly readable: ReadableStream<Uint8Array<ArrayBuffer>> | null
   readonly writable: WritableStream<Uint8Array<ArrayBuffer>> | null
   open(options: SerialOptions): Promise<void>
   close(): Promise<void>
   getInfo(): SerialPortInfo
+  setSignals(signals: SerialOutputSignals): Promise<void>
   addEventListener(type: 'disconnect', listener: (event: Event) => void): void
   removeEventListener(type: 'disconnect', listener: (event: Event) => void): void
 }
@@ -86,6 +93,20 @@ export class RadioSerial {
     this.closed = false
     this.disconnectNotified = false
 
+    if (port.readable || port.writable) {
+      try {
+        const oldReader = port.readable?.getReader()
+        oldReader?.cancel()
+        oldReader?.releaseLock()
+      } catch { /* ignore */ }
+      try {
+        const oldWriter = port.writable?.getWriter()
+        await oldWriter?.close()
+        oldWriter?.releaseLock()
+      } catch { /* ignore */ }
+      try { await port.close() } catch { /* ignore */ }
+    }
+
     await port.open({
       baudRate: config.baudRate,
       dataBits: config.dataBits,
@@ -95,6 +116,11 @@ export class RadioSerial {
     })
 
     this.port = port
+
+    try {
+      await port.setSignals({ dataTerminalReady: true, requestToSend: true })
+    } catch { /* not all implementations support setSignals */ }
+
     port.addEventListener('disconnect', () => {
       if (!this.disconnectNotified) {
         this.disconnectNotified = true

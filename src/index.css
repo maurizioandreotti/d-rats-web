@@ -10,6 +10,7 @@
   --success: #16a34a;
   --warning: #d97706;
   --error: #dc2626;
+  --code-bg: #f4f3ec;
 
   --sans: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --mono: ui-monospace, 'Cascadia Code', 'Fira Code', Consolas, monospace;
@@ -35,6 +36,7 @@
     --success: #22c55e;
     --warning: #f59e0b;
     --error: #ef4444;
+    --code-bg: #1a1b23;
   }
 }
 

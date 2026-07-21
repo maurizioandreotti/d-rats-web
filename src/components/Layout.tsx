@@ -7,6 +7,7 @@ import { FileTransfer } from './FileTransfer'
 import { StationsList } from './StationsList'
 import { EventLog } from './EventLog'
 import { ConfigPanel } from './ConfigPanel'
+import { SnifferPanel } from './SnifferPanel'
 
 interface TabDef {
   id: string
@@ -15,6 +16,7 @@ interface TabDef {
 
 const TABS: TabDef[] = [
   { id: 'radio', label: 'Radio' },
+  { id: 'sniffer', label: 'Sniffer' },
   { id: 'chat', label: 'Chat' },
   { id: 'map', label: 'Map' },
   { id: 'files', label: 'Files' },
@@ -37,6 +39,8 @@ export function Layout() {
             onDisconnected={onSerialDisconnected}
           />
         )
+      case 'sniffer':
+        return <SnifferPanel />
       case 'chat':
         return <ChatPanel />
       case 'map':

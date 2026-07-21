@@ -54,6 +54,8 @@ export function getSerialApi(): NavigatorSerial | undefined {
 }
 
 export class RadioSerial {
+  static onSniff: ((direction: 'rx' | 'tx', data: Uint8Array) => void) | null = null
+
   private port: SerialPort | null = null
   private reader: ReadableStreamDefaultReader<Uint8Array<ArrayBuffer>> | null = null
   private writer: WritableStreamDefaultWriter<Uint8Array<ArrayBuffer>> | null = null
@@ -158,6 +160,7 @@ export class RadioSerial {
       const end = Math.min(pos + chunk, data.length)
       const slice = data.subarray(pos, end)
 
+      RadioSerial.onSniff?.('tx', slice)
       await this.writer.write(slice as Uint8Array<ArrayBuffer>)
 
       const waitStart = Date.now()
@@ -179,12 +182,36 @@ export class RadioSerial {
     if (this.readLoopActive) return
     this.readLoopActive = true
 
+    console.log('[RadioSerial] Read loop started')
+
     const loop = async () => {
+      console.log('[RadioSerial] Reader:', !!this.reader, 'Closed:', this.closed)
+
+      // Poll: some Chrome versions need delay before readable is ready
+      if (!this.reader && this.port) {
+        for (let i = 0; i < 50; i++) {
+          await sleep(100)
+          if (this.port.readable) {
+            this.reader = this.port.readable.getReader()
+            console.log('[RadioSerial] Reader obtained after poll')
+            break
+          }
+        }
+      }
+
       while (!this.closed && this.reader) {
         try {
           const { value, done } = await this.reader.read()
-          if (done) break
-          if (!value) continue
+          if (done) {
+            console.log('[RadioSerial] Reader done')
+            break
+          }
+          if (!value) {
+            console.log('[RadioSerial] Empty read')
+            continue
+          }
+
+          console.log('[RadioSerial] Read', value.length, 'bytes:', Array.from(value.slice(0, 16)).map(b => b.toString(16).padStart(2, '0')).join(' '))
 
           const filtered: number[] = []
           for (const byte of value) {
@@ -197,10 +224,13 @@ export class RadioSerial {
             }
           }
 
+          RadioSerial.onSniff?.('rx', value)
+
           if (filtered.length > 0 && this.onData) {
             this.onData(new Uint8Array(filtered))
           }
-        } catch {
+        } catch (err) {
+          console.log('[RadioSerial] Read error:', err)
           if (!this.closed) {
             if (!this.disconnectNotified) {
               this.disconnectNotified = true
@@ -210,6 +240,7 @@ export class RadioSerial {
           break
         }
       }
+      console.log('[RadioSerial] Read loop ended')
       this.readLoopActive = false
     }
 

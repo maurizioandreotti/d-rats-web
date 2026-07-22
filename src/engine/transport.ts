@@ -11,7 +11,7 @@ export class Transport {
 
   constructor(serial: RadioSerial) {
     this.serial = serial
-    this.serial.setOnData((data) => this.onSerialData(data))
+    this.serial.addDataCallback((data) => this.onSerialData(data))
   }
 
   setOnFrame(cb: (frame: DDT2Frame) => void): void {
@@ -26,8 +26,8 @@ export class Transport {
     this.onRawText = cb
   }
 
-  async sendFrame(frame: DDT2Frame): Promise<void> {
-    const wireData = await encodeFrame(frame)
+  async sendFrame(frame: DDT2Frame, compress = true): Promise<void> {
+    const wireData = await encodeFrame(frame, compress)
     await this.serial.send(wireData)
   }
 
@@ -57,12 +57,14 @@ export class Transport {
       const frameEnd = eobIdx + ENCODED_TRAILER.length
       const frameData = this.buffer.slice(sobIdx, frameEnd)
 
-      const remaining = this.buffer.buffer.slice(frameEnd)
+      const remaining = this.buffer.slice(frameEnd)
       this.buffer = new Uint8Array(remaining)
 
       decodeFrame(frameData).then((frame) => {
         if (frame) {
           this.onFrame?.(frame)
+        } else {
+          console.warn('[Transport] decodeFrame returned null — CRC, yEnc, or zlib mismatch')
         }
       })
     }

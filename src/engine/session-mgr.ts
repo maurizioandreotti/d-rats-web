@@ -7,13 +7,14 @@ export interface SessionHandler {
   incoming(frame: DDT2Frame): void
 }
 
-export type FrameCallback = (frame: DDT2Frame) => Promise<void>
+export type FrameCallback = (frame: DDT2Frame, portName?: string) => Promise<void>
 
 export class SessionManager {
   private sessions = new Map<number, SessionHandler>()
   private outgoingCallback: FrameCallback | null = null
   private station = 'CQCQCQ'
   private heardStations = new Map<string, number>()
+  private stationPorts = new Map<string, string>()
   private nextSessionId = 2
 
   setOutgoingCallback(cb: FrameCallback): void {
@@ -36,6 +37,14 @@ export class SessionManager {
     this.sessions.delete(sessionId)
   }
 
+  heardOnPort(callsign: string, portName: string): void {
+    this.stationPorts.set(callsign, portName)
+  }
+
+  getPortForStation(callsign: string): string | undefined {
+    return this.stationPorts.get(callsign)
+  }
+
   async incoming(frame: DDT2Frame): Promise<void> {
     const { sessionId, sourceStation } = frame.header
 
@@ -51,7 +60,7 @@ export class SessionManager {
     }
   }
 
-  async outgoing(frame: DDT2Frame): Promise<void> {
+  async outgoing(frame: DDT2Frame, portName?: string): Promise<void> {
     if (!this.outgoingCallback) return
 
     frame.header.sourceStation = this.station
@@ -59,7 +68,7 @@ export class SessionManager {
       frame.header.destStation = 'CQCQCQ'
     }
 
-    await this.outgoingCallback(frame)
+    await this.outgoingCallback(frame, portName)
   }
 
   async startSession(_sessionType: number, _destStation: string): Promise<number> {

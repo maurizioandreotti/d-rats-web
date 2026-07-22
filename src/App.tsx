@@ -6,11 +6,12 @@ import './App.css'
 
 function App() {
   useEffect(() => {
-    RadioSerial.onSniff = (direction, data) => {
+    const cb = (direction: 'rx' | 'tx', data: Uint8Array) => {
       useSnifferStore.getState().addPacket(direction, data)
     }
+    RadioSerial.addSniffListener(cb)
     return () => {
-      RadioSerial.onSniff = null
+      RadioSerial.removeSniffListener(cb)
     }
   }, [])
 

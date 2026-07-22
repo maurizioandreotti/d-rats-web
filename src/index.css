@@ -1,5 +1,6 @@
 :root {
   --text: #6b6375;
+  --text-muted: #9ca3af;
   --text-h: #08060d;
   --bg: #fff;
   --bg-sidebar: #f8f8fa;
@@ -26,6 +27,7 @@
 @media (prefers-color-scheme: dark) {
   :root {
     --text: #9ca3af;
+    --text-muted: #6b7280;
     --text-h: #f3f4f6;
     --bg: #0f1117;
     --bg-sidebar: #16181f;

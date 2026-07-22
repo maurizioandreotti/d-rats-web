@@ -1,177 +1,307 @@
-import { useState, useCallback, useEffect, useRef } from 'react'
-import { RadioSerial } from '../engine/serial'
-import type { RadioSerialConfig } from '../engine/serial'
+import { useState, useCallback, useEffect } from 'react'
 import { useConfigStore } from '../store/config-store'
+import { usePortStore } from '../store/port-store'
+import { useRatflectorListStore } from '../store/ratflector-list-store'
+import type { PortConfig } from '../types'
 
 interface SerialConnectProps {
-  serial: { current: RadioSerial | null }
-  onConnected?: () => void
-  onDisconnected?: () => void
+  onConnect: (name: string, config: PortConfig) => Promise<void>
+  onDisconnect: (name: string) => Promise<void>
+  onPortSelected: (name: string) => void
 }
 
-export function SerialConnect({ serial, onConnected, onDisconnected }: SerialConnectProps) {
-  const { config, updateConfig } = useConfigStore()
-  const instance = serial.current
-  const [connected, setConnected] = useState(() => instance?.isConnected ?? false)
-  const [connecting, setConnecting] = useState(false)
-  const [status, setStatus] = useState(() => {
-    return instance?.isConnected ? `Connected at ${config.serial.baudRate} baud` : 'Not connected'
-  })
-  const [portInfo, setPortInfo] = useState<{ usbVendorId?: number; usbProductId?: number } | null>(
-    () => instance?.portInfo ?? null,
-  )
-  const [baudRate, setBaudRate] = useState(config.serial.baudRate)
-  const [bytesReceived, setBytesReceived] = useState(0)
-  const [lastHex, setLastHex] = useState('')
-  const dataRef = useRef<RadioSerial | null>(instance)
+export function SerialConnect({ onConnect, onDisconnect, onPortSelected }: SerialConnectProps) {
+  const { config, updatePort, addPort, removePort } = useConfigStore()
+  const portStatuses = usePortStore((s) => s.statuses)
+  const portMessages = usePortStore((s) => s.messages)
+  const [connecting, setConnecting] = useState<string | null>(null)
+  const [activePort, setActivePort] = useState<string>('')
+  const [showAdd, setShowAdd] = useState(false)
+  const [newType, setNewType] = useState<'serial' | 'ratflector'>('serial')
+  const [newName, setNewName] = useState('')
+  const [newHost, setNewHost] = useState('ref.d-rats.com')
+  const [newPort, setNewPort] = useState('9000')
+  const [newPass, setNewPass] = useState('')
+  const [newBaud, setNewBaud] = useState('9600')
+  const [newServerName, setNewServerName] = useState('')
+  const [newBridgeUrl, setNewBridgeUrl] = useState('ws://localhost:9001')
+  const [editingIndex, setEditingIndex] = useState<number | null>(null)
+
+  const ratflectorServers = useRatflectorListStore((s) => s.servers)
+  const rfLoading = useRatflectorListStore((s) => s.loading)
+  const rfError = useRatflectorListStore((s) => s.error)
+  const fetchServers = useRatflectorListStore((s) => s.fetchServers)
 
   useEffect(() => {
-    const inst = serial.current
-    if (inst && inst.isConnected) {
-      setConnected(true)
-      setStatus(`Connected at ${baudRate} baud`)
-      setPortInfo(inst.portInfo)
+    if (showAdd && newType === 'ratflector' && ratflectorServers.length === 0 && !rfLoading && !rfError) {
+      fetchServers()
     }
-  }, [serial, baudRate])
+  }, [showAdd, newType, ratflectorServers.length, rfLoading, rfError, fetchServers])
 
-  const handleConnect = useCallback(async () => {
-    try {
-      setConnecting(true)
-      setStatus('Requesting serial port...')
+  const handleServerSelect = useCallback((name: string) => {
+    setNewServerName(name)
+    const server = ratflectorServers.find(s => s.name === name)
+    if (server) {
+      setNewHost(server.hostname)
+      setNewPort(String(server.port))
+    }
+  }, [ratflectorServers])
 
-      const port = await RadioSerial.requestPort()
-      const inst = new RadioSerial()
+  const handleConnect = useCallback(
+    async (port: PortConfig, index: number) => {
+      setConnecting(port.name)
+      try {
+        await onConnect(port.name, port)
+        updatePort(index, { enabled: true })
+        setActivePort(port.name)
+        onPortSelected(port.name)
+      } catch {
+        // error already set in store by engine
+      } finally {
+        setConnecting(null)
+      }
+    },
+    [onConnect, updatePort, onPortSelected],
+  )
 
-      inst.setOnDisconnect(() => {
-        setConnected(false)
-        setStatus('Disconnected')
-        setPortInfo(null)
-        onDisconnected?.()
-      })
+  const handleDisconnect = useCallback(
+    async (name: string) => {
+      await onDisconnect(name)
+      if (activePort === name) {
+        setActivePort('')
+        onPortSelected('')
+      }
+    },
+    [onDisconnect, activePort, onPortSelected],
+  )
 
-      inst.setOnData((data) => {
-        setBytesReceived((prev) => prev + data.length)
-        if (data.length > 0) {
-          const hex = Array.from(data.slice(0, 16))
-            .map((b) => b.toString(16).padStart(2, '0'))
-            .join(' ')
-          setLastHex(hex)
-        }
-      })
+  const handleSetActive = useCallback(
+    (name: string) => {
+      setActivePort(name)
+      onPortSelected(name)
+    },
+    [onPortSelected],
+  )
 
-      const serialConfig: RadioSerialConfig = {
-        baudRate,
+  const handleDelete = useCallback(
+    async (name: string, index: number) => {
+      if (portStatuses[name] === 'connected') {
+        await onDisconnect(name)
+      }
+      removePort(index)
+      if (activePort === name) {
+        setActivePort('')
+        onPortSelected('')
+      }
+    },
+    [onDisconnect, removePort, activePort, onPortSelected, portStatuses],
+  )
+
+  const handleEdit = useCallback((index: number) => {
+    const port = config.ports[index]
+    if (!port) return
+    setEditingIndex(index)
+    setNewType(port.type)
+    setNewName(port.name)
+    setNewBaud(port.type === 'serial' ? port.settings : '9600')
+    setNewHost(port.ratflector?.host ?? 'ref.d-rats.com')
+    setNewPort(String(port.ratflector?.port ?? 9000))
+    setNewPass(port.ratflector?.password ?? '')
+    setNewBridgeUrl(port.ratflector?.bridgeUrl ?? 'ws://localhost:9001')
+    setNewServerName('')
+    setShowAdd(true)
+  }, [config.ports])
+
+  const handleAddPort = useCallback(() => {
+    if (!newName) return
+
+    const port: PortConfig = {
+      enabled: editingIndex === null ? true : config.ports[editingIndex]?.enabled ?? true,
+      type: newType,
+      settings: newType === 'serial' ? newBaud : newPass,
+      sniff: false,
+      raw: false,
+      name: newName,
+    }
+
+    if (newType === 'serial') {
+      port.serial = {
+        baudRate: parseInt(newBaud, 10),
         dataBits: 8,
         stopBits: 1,
         parity: 'none',
+        flowControl: 'xon/xoff',
       }
-
-      await inst.connect(port, serialConfig)
-
-      serial.current = inst
-      dataRef.current = inst
-      setConnected(true)
-      setStatus(`Connected at ${baudRate} baud`)
-      setPortInfo(port.getInfo())
-      setBytesReceived(0)
-      setLastHex('')
-      updateConfig({ serial: { ...config.serial, baudRate } })
-      onConnected?.()
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unknown error'
-      setStatus(`Error: ${message}`)
-    } finally {
-      setConnecting(false)
+    } else {
+      port.ratflector = {
+        host: newHost,
+        port: parseInt(newPort, 10),
+        callsign: config.myCallsign,
+        password: newPass,
+        bridgeUrl: newBridgeUrl || undefined,
+      }
     }
-  }, [baudRate, serial, config.serial, updateConfig, onConnected, onDisconnected])
 
-  const handleDisconnect = useCallback(async () => {
-    const inst = serial.current
-    if (inst) {
-      await inst.disconnect()
-      serial.current = null
-      dataRef.current = null
+    if (editingIndex !== null) {
+      updatePort(editingIndex, port)
+    } else {
+      addPort(port)
     }
-    setConnected(false)
-    setStatus('Disconnected')
-    setPortInfo(null)
-    onDisconnected?.()
-  }, [serial, onDisconnected])
+    cancelForm()
+  }, [newType, newName, newBaud, newHost, newPort, newPass, newBridgeUrl, config.myCallsign, config.ports, editingIndex, addPort, updatePort])
+
+  const cancelForm = useCallback(() => {
+    setShowAdd(false)
+    setEditingIndex(null)
+    setNewName('')
+    setNewPass('')
+  }, [])
 
   return (
     <div>
-      <h2>Radio Connection</h2>
+      <h2>Ports</h2>
 
-      <div className="panel-card">
-        <h3>Serial Port</h3>
-        <div className="form-row">
-          <label htmlFor="baud">Baud Rate</label>
-          <select
-            id="baud"
-            value={baudRate}
-            onChange={(e) => setBaudRate(Number(e.target.value))}
-            disabled={connecting || connected}
-          >
-            <option value="4800">4800</option>
-            <option value="9600">9600</option>
-            <option value="19200">19200</option>
-            <option value="38400">38400</option>
-            <option value="57600">57600</option>
-            <option value="115200">115200</option>
-          </select>
-        </div>
+      <div className="port-list">
+        {config.ports.map((port, i) => {
+          const status = portStatuses[port.name] ?? 'disconnected'
+          const msg = portMessages[port.name] ?? ''
+          const isConnecting = connecting === port.name
+          const isConnected = status === 'connected'
+          const isActive = activePort === port.name
 
-        <div className="status-indicator">
-          <span className={`status-dot ${connected ? 'online' : 'offline'}`} />
-          <span className="status-text">{status}</span>
-        </div>
+          return (
+            <div key={i} className={`port-card ${isActive ? 'active' : ''}`}>
+              <div className="port-header">
+                <span className="port-type-badge">{port.type === 'ratflector' ? 'RAT' : 'SER'}</span>
+                <span className={`status-dot ${status === 'connected' ? 'online' : status === 'connecting' ? 'warning' : status === 'error' ? 'offline' : 'unknown'}`} />
+                <strong className="port-name">{port.name}</strong>
+                <span className="port-settings">
+                  {port.type === 'serial' ? `${port.settings} baud` : port.ratflector ? `${port.ratflector.host}:${port.ratflector.port}` : ''}
+                </span>
+              </div>
+              <div className="port-status-text">
+                {isConnected
+                  ? `Connected${port.type === 'serial' ? ` at ${port.settings} baud` : ` to ${port.ratflector?.host}:${port.ratflector?.port}`}`
+                  : msg || (status === 'disconnected' ? (port.type === 'ratflector' ? 'Run: python3 ratflector-bridge.py' : 'Not connected') : status)}
+              </div>
+              {port.type === 'serial' && port.serial && !isConnected && (
+                <div className="port-serial-config">
+                  <select
+                    value={port.serial.baudRate}
+                    onChange={(e) => updatePort(i, { serial: { ...port.serial!, baudRate: Number(e.target.value) }, settings: e.target.value })}
+                    disabled={isConnecting}
+                  >
+                    {[4800, 9600, 19200, 38400, 57600, 115200].map((b) => (
+                      <option key={b} value={b}>{b}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              <div className="port-actions">
+                {!isConnected ? (
+                  <button className="btn btn-sm btn-primary" onClick={() => handleConnect(port, i)} disabled={isConnecting}>
+                    {isConnecting ? 'Connecting...' : 'Connect'}
+                  </button>
+                ) : (
+                  <>
+                    <button className="btn btn-sm btn-primary" onClick={() => handleSetActive(port.name)} disabled={isActive}>
+                      {isActive ? 'Active' : 'Use'}
+                    </button>
+                    <button className="btn btn-sm btn-danger" onClick={() => handleDisconnect(port.name)}>
+                      Disconnect
+                    </button>
+                  </>
+                )}
+                <button className="btn btn-sm btn-danger-outline" onClick={() => handleDelete(port.name, i)}>
+                  Delete
+                </button>
+                <button className="btn btn-sm" onClick={() => handleEdit(i)}>
+                  Edit
+                </button>
+              </div>
+            </div>
+          )
+        })}
+      </div>
 
-        {portInfo && (
-          <div className="port-details">
-            <p>USB Vendor ID: 0x{portInfo.usbVendorId?.toString(16).padStart(4, '0') ?? 'N/A'}</p>
-            <p>USB Product ID: 0x{portInfo.usbProductId?.toString(16).padStart(4, '0') ?? 'N/A'}</p>
+      {showAdd && (
+        <div className="panel-card">
+          <h3>{editingIndex !== null ? 'Edit Port' : 'Add Port'}</h3>
+          <div className="form-row">
+            <label>Type</label>
+            <select value={newType} onChange={(e) => setNewType(e.target.value as 'serial' | 'ratflector')}>
+              <option value="serial">Serial</option>
+              <option value="ratflector">Ratflector</option>
+            </select>
           </div>
-        )}
-
-        {connected && (
-          <div className="debug-data">
-            <p>Bytes received: {bytesReceived}</p>
-            {lastHex && <p className="mono">Last bytes: {lastHex}</p>}
+          <div className="form-row">
+            <label>Name</label>
+            <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="e.g. Radio, RAT" />
           </div>
-        )}
-
-        <div className="button-row">
-          {!connected ? (
-            <button className="btn btn-primary" onClick={handleConnect} disabled={connecting}>
-              {connecting ? 'Connecting...' : 'Connect to Radio'}
-            </button>
+          {newType === 'serial' ? (
+            <div className="form-row">
+              <label>Baud Rate</label>
+              <select value={newBaud} onChange={(e) => setNewBaud(e.target.value)}>
+                {[4800, 9600, 19200, 38400, 57600, 115200].map((b) => (
+                  <option key={b} value={b}>{b}</option>
+                ))}
+              </select>
+            </div>
           ) : (
-            <button className="btn btn-danger" onClick={handleDisconnect}>
-              Disconnect
-            </button>
+            <>
+              <div className="form-row">
+                <label>Server</label>
+                <select value={newServerName} onChange={(e) => handleServerSelect(e.target.value)}>
+                  <option value="">-- Custom --</option>
+                  {rfError ? (
+                    <option value="" disabled>Failed to load</option>
+                  ) : rfLoading ? (
+                    <option value="" disabled>Loading...</option>
+                  ) : (
+                    ratflectorServers.map(s => (
+                      <option key={s.name} value={s.name}>
+                        {s.name} — {s.description}
+                      </option>
+                    ))
+                  )}
+                </select>
+                {rfError && (
+                  <button className="btn btn-xs" onClick={fetchServers} title="Retry">
+                    Retry
+                  </button>
+                )}
+              </div>
+              <div className="form-row">
+                <label>Host</label>
+                <input value={newHost} onChange={(e) => setNewHost(e.target.value)} />
+              </div>
+              <div className="form-row">
+                <label>Port</label>
+                <input value={newPort} onChange={(e) => setNewPort(e.target.value)} />
+              </div>
+              <div className="form-row">
+                <label>Password</label>
+                <input value={newPass} type="password" onChange={(e) => setNewPass(e.target.value)} />
+              </div>
+              <div className="form-row">
+                <label>Bridge URL</label>
+                <input value={newBridgeUrl} onChange={(e) => setNewBridgeUrl(e.target.value)} placeholder="ws://localhost:9001" />
+              </div>
+              <p className="help-text">
+                Ratflector uses raw TCP — run <code>python3 ratflector-bridge.py</code> locally
+              </p>
+            </>
           )}
+          <div className="button-row">
+            <button className="btn btn-primary" onClick={handleAddPort}>{editingIndex !== null ? 'Save' : 'Add'}</button>
+            <button className="btn" onClick={cancelForm}>Cancel</button>
+          </div>
         </div>
-      </div>
+      )}
 
-      <div className="panel-card">
-        <h3>How to Connect</h3>
-        <ol>
-          <li>Connect your ICOM D-STAR radio to USB via the data dongle</li>
-          <li>Select the correct baud rate (typically 9600 for direct radio)</li>
-          <li>Click "Connect to Radio" and select the serial port in the browser dialog</li>
-          <li>Once connected, use the Chat, Map, and Files tabs</li>
-        </ol>
-        <p className="note">
-          Note: Web Serial API requires Chrome or Edge. The browser will prompt you to
-          select the serial port.
-        </p>
-        {connected && (
-          <p className="note">
-            Debug: If no data appears above, the radio may need DTR/RTS. Try power-cycling the
-            radio or checking the USB cable connection.
-          </p>
-        )}
-      </div>
+      {!showAdd && (
+        <button className="btn btn-sm" onClick={() => { setShowAdd(true); setEditingIndex(null); setNewName(''); setNewPass(''); }}>+ Add Port</button>
+      )}
     </div>
   )
 }

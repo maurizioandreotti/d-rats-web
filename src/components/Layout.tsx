@@ -8,6 +8,7 @@ import { StationsList } from './StationsList'
 import { EventLog } from './EventLog'
 import { ConfigPanel } from './ConfigPanel'
 import { SnifferPanel } from './SnifferPanel'
+import { PingPanel } from './PingPanel'
 
 interface TabDef {
   id: string
@@ -16,39 +17,45 @@ interface TabDef {
 
 const TABS: TabDef[] = [
   { id: 'radio', label: 'Radio' },
-  { id: 'sniffer', label: 'Sniffer' },
   { id: 'chat', label: 'Chat' },
-  { id: 'map', label: 'Map' },
   { id: 'files', label: 'Files' },
-  { id: 'stations', label: 'Stations' },
+  { id: 'sniffer', label: 'Sniffer' },
+  { id: 'ping', label: 'Pings' },
+  { id: 'map', label: 'Map' },
   { id: 'events', label: 'Events' },
   { id: 'config', label: 'Config' },
 ]
 
 export function Layout() {
   const [activeTab, setActiveTab] = useState('radio')
-  const { serialRef, onSerialConnected, onSerialDisconnected } = useDratsEngine()
+  const {
+    chatRef,
+    sessionMgrRef,
+    connectPort,
+    disconnectPort,
+    setActivePort,
+  } = useDratsEngine()
 
   const renderContent = () => {
     switch (activeTab) {
       case 'radio':
         return (
           <SerialConnect
-            serial={serialRef}
-            onConnected={onSerialConnected}
-            onDisconnected={onSerialDisconnected}
+            onConnect={connectPort}
+            onDisconnect={disconnectPort}
+            onPortSelected={setActivePort}
           />
         )
       case 'sniffer':
         return <SnifferPanel />
       case 'chat':
-        return <ChatPanel />
+        return <ChatPanel chatRef={chatRef} />
+      case 'ping':
+        return <PingPanel />
       case 'map':
         return <MapPanel />
       case 'files':
         return <FileTransfer />
-      case 'stations':
-        return <StationsList />
       case 'events':
         return <EventLog />
       case 'config':
@@ -60,24 +67,34 @@ export function Layout() {
 
   return (
     <div className="app-layout">
-      <nav className="sidebar">
-        <div className="sidebar-header">
-          <h1>D-RATS</h1>
+      <aside className="stations-panel">
+        <div className="stations-panel-header">
+          <h2>Stations</h2>
         </div>
-        <ul className="nav-list">
+        <div className="stations-panel-content">
+          <StationsList chatRef={chatRef} sessionMgrRef={sessionMgrRef} />
+        </div>
+      </aside>
+
+      <div className="main-panel">
+        <nav className="tab-bar">
           {TABS.map((tab) => (
-            <li key={tab.id}>
-              <button
-                className={`nav-item ${activeTab === tab.id ? 'active' : ''}`}
-                onClick={() => setActiveTab(tab.id)}
-              >
-                {tab.label}
-              </button>
-            </li>
+            <button
+              key={tab.id}
+              className={`tab-btn ${activeTab === tab.id ? 'active' : ''}`}
+              onClick={() => setActiveTab(tab.id)}
+            >
+              {tab.label}
+            </button>
           ))}
-        </ul>
-      </nav>
-      <main className="main-content">{renderContent()}</main>
+        </nav>
+
+        <main className="tab-content">{renderContent()}</main>
+
+        <footer className="status-bar">
+          <span className="status-text">D-RATS Web v0.1.0</span>
+        </footer>
+      </div>
     </div>
   )
 }

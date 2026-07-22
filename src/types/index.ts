@@ -31,6 +31,7 @@ export interface ChatMessage {
   text: string
   timestamp: number
   direction: 'incoming' | 'outgoing'
+  port?: string
 }
 
 export interface DDT2Header {
@@ -69,7 +70,6 @@ export interface FileTransferItem {
 }
 
 export interface SerialConfig {
-  port?: string
   baudRate: number
   dataBits: number
   stopBits: number
@@ -77,9 +77,45 @@ export interface SerialConfig {
   flowControl: 'xon/xoff' | 'none'
 }
 
+export interface RatflectorConfig {
+  host: string
+  port: number
+  callsign: string
+  password: string
+  bridgeUrl?: string
+}
+
+export interface PortConfig {
+  enabled: boolean
+  type: 'serial' | 'ratflector'
+  settings: string
+  sniff: boolean
+  raw: boolean
+  name: string
+  // serial-specific
+  serial?: SerialConfig
+  // ratflector-specific
+  ratflector?: RatflectorConfig
+}
+
+export interface PingInfo {
+  from: string
+  to: string
+  type: 'request' | 'response' | 'echo_request' | 'echo_response'
+  data: string
+  timestamp: number
+}
+
 export interface AppConfig {
   myCallsign: string
-  serial: SerialConfig
+  myName: string
+  signOnMessage: string
+  signOffMessage: string
+  pingInfo: string
+  units: 'imperial' | 'metric'
+  showUtc: boolean
+  ports: PortConfig[]
   mapCenter: [number, number]
   mapZoom: number
+  myPosition?: GPSPosition
 }

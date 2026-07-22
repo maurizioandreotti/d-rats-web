@@ -2,8 +2,8 @@ import { computeCrc } from './crc'
 import { yencode, ydecode } from './yencode'
 import type { DDT2Frame } from '../types'
 
-export const ENCODED_HEADER = new Uint8Array([0x5b, 0x53, 0x4f, 0x42])
-export const ENCODED_TRAILER = new Uint8Array([0x5b, 0x45, 0x4f, 0x42])
+export const ENCODED_HEADER = new Uint8Array([0x5b, 0x53, 0x4f, 0x42, 0x5d])
+export const ENCODED_TRAILER = new Uint8Array([0x5b, 0x45, 0x4f, 0x42, 0x5d])
 
 export const MAGIC_COMPRESSED = 0xdd
 export const MAGIC_UNCOMPRESSED = 0x22
@@ -20,7 +20,7 @@ function padCallsign(call: string): Uint8Array {
 
 function trimCallsign(bytes: Uint8Array<ArrayBuffer>): string {
   const decoder = new TextDecoder()
-  return decoder.decode(bytes).replace(/~+$/, '')
+  return decoder.decode(bytes).replace(/~/g, '')
 }
 
 export async function encodeFrame(
@@ -31,7 +31,7 @@ export async function encodeFrame(
 
   let data: Uint8Array = frame.data
   if (compress) {
-    const cs = new CompressionStream('deflate-raw')
+    const cs = new CompressionStream('deflate')
     const writer = cs.writable.getWriter()
     writer.write(data as Uint8Array<ArrayBuffer>)
     writer.close()
@@ -58,8 +58,8 @@ export async function encodeFrame(
   const headerBase = new Uint8Array(HEADER_SIZE)
   const dv = new DataView(headerBase.buffer)
   dv.setUint8(0, magic)
-  dv.setUint8(1, frame.header.seq)
-  dv.setUint16(2, frame.header.sessionId, false)
+  dv.setUint16(1, frame.header.seq, false)
+  dv.setUint8(3, frame.header.sessionId)
   dv.setUint8(4, frame.header.type)
   dv.setUint16(5, 0, false)
   dv.setUint16(7, data.length, false)
@@ -106,8 +106,8 @@ export async function decodeFrame(wireData: Uint8Array): Promise<DDT2Frame | nul
     return null
   }
 
-  const seq = dv.getUint8(1)
-  const sessionId = dv.getUint16(2, false)
+  const seq = dv.getUint16(1, false)
+  const sessionId = dv.getUint8(3)
   const type = dv.getUint8(4)
   const checksum = dv.getUint16(5, false)
   const length = dv.getUint16(7, false)
@@ -131,7 +131,7 @@ export async function decodeFrame(wireData: Uint8Array): Promise<DDT2Frame | nul
   let data: Uint8Array
   if (compressed) {
     try {
-      const cs = new DecompressionStream('deflate-raw')
+      const cs = new DecompressionStream('deflate')
       const writer = cs.writable.getWriter()
       writer.write(payload as Uint8Array<ArrayBuffer>)
       writer.close()

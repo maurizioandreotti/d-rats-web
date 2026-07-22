@@ -1,60 +1,63 @@
 import { useCallback, useRef } from 'react'
-import { RadioSerial } from '../engine/serial'
-import { Transport } from '../engine/transport'
+import type { PortConfig } from '../types'
 import { SessionManager } from '../engine/session-mgr'
 import { ChatEngine } from '../engine/chat'
 import { FileTransferEngine } from '../engine/file'
-import { parseGps } from '../engine/gps'
+import { TransportManager } from '../engine/transport-manager'
 import { useChatStore } from '../store/chat-store'
+import { usePingStore } from '../store/ping-store'
 import { useStationStore } from '../store/station-store'
 import { useFileStore } from '../store/file-store'
 import { useConfigStore } from '../store/config-store'
 import type { DDT2Frame } from '../types'
 import { StationStatus } from '../types'
 
-export interface DratsEngine {
-  serial: RadioSerial | null
-  transport: Transport | null
-  sessionManager: SessionManager | null
-  chat: ChatEngine | null
-  fileTransfer: FileTransferEngine | null
-}
-
 export function useDratsEngine() {
-  const serialRef = useRef<RadioSerial | null>(null)
-  const transportRef = useRef<Transport | null>(null)
+  const transportMgrRef = useRef<TransportManager | null>(null)
   const sessionMgrRef = useRef<SessionManager | null>(null)
   const chatRef = useRef<ChatEngine | null>(null)
   const fileRef = useRef<FileTransferEngine | null>(null)
   const initializedRef = useRef(false)
+  const activePortRef = useRef('')
 
   const addChatMessage = useChatStore((s) => s.addMessage)
-  const { updateStation, setStationPosition, setOwnPosition } = useStationStore()
+  const addPing = usePingStore((s) => s.addPing)
+  const { updateStation, setStationPosition } = useStationStore()
   const { addTransfer, updateTransfer } = useFileStore()
   const config = useConfigStore((s) => s.config)
 
+  const handleFrame = useCallback(
+    async (frame: DDT2Frame, portName: string) => {
+      const sessionMgr = sessionMgrRef.current
+      if (sessionMgr) {
+        sessionMgr.heardOnPort(frame.header.sourceStation, portName)
+        await sessionMgr.incoming(frame)
+      }
+    },
+    [],
+  )
+
   const initEngine = useCallback(() => {
     if (initializedRef.current) return
+
+    const transportMgr = new TransportManager()
+    transportMgrRef.current = transportMgr
 
     const sessionMgr = new SessionManager()
     sessionMgr.setStation(config.myCallsign || 'N0CALL')
     sessionMgrRef.current = sessionMgr
 
     const chat = new ChatEngine(sessionMgr)
+    chat.setPingInfo(config.pingInfo)
     chat.setOnMessage((from, to, text) => {
       const id = crypto.randomUUID()
       addChatMessage({ id, from, to, text, timestamp: Date.now(), direction: 'incoming' })
     })
+    chat.setOnPing((from, to, type, data) => {
+      addPing({ from, to, type: type as 'request' | 'response' | 'echo_request' | 'echo_response', data, timestamp: Date.now() })
+    })
     chat.setOnGpsFix((from, lat, lon) => {
       setStationPosition(from, { lat, lon, timestamp: Date.now() })
-    })
-    chat.setOnPingRequest((from, to) => {
-      const id = crypto.randomUUID()
-      addChatMessage({ id, from, to, text: `[Ping from ${from}]`, timestamp: Date.now(), direction: 'incoming' })
-    })
-    chat.setOnPingResponse((from, to, data) => {
-      const id = crypto.randomUUID()
-      addChatMessage({ id, from, to, text: `[Pong from ${from}: ${data}]`, timestamp: Date.now(), direction: 'incoming' })
     })
     chat.setOnStatus((from, status) => {
       updateStation(from, { status: status as StationStatus, lastHeard: Date.now() })
@@ -62,9 +65,9 @@ export function useDratsEngine() {
     chatRef.current = chat
 
     const fileTransfer = new FileTransferEngine(sessionMgr)
-    fileTransfer.setOnOffer((filename, size) => {
+    fileTransfer.setOnOffer((filename, size, sessionId) => {
       const id = crypto.randomUUID()
-      addTransfer({ id, filename, size, transferred: 0, direction: 'receive', state: 'offer', station: '' })
+      addTransfer({ id, filename, size, transferred: 0, direction: 'receive', state: 'offer', station: String(sessionId) })
     })
     fileTransfer.setOnProgress((filename, transferred, total) => {
       const store = useFileStore.getState()
@@ -75,58 +78,56 @@ export function useDratsEngine() {
     })
     fileRef.current = fileTransfer
 
-    sessionMgr.setOutgoingCallback(async (frame: DDT2Frame) => {
-      const transport = transportRef.current
-      if (transport) {
-        await transport.sendFrame(frame)
-      }
+    transportMgr.setOnFrame(handleFrame)
+
+    sessionMgr.setOutgoingCallback(async (frame: DDT2Frame, portName?: string) => {
+      const mgr = transportMgrRef.current
+      if (!mgr) return
+      const port = portName || activePortRef.current
+      await mgr.sendFrame(frame, port || undefined)
     })
 
     initializedRef.current = true
-  }, [config.myCallsign, addChatMessage, updateStation, setStationPosition, addTransfer, updateTransfer])
+  }, [config.myCallsign, config.pingInfo, addChatMessage, addPing, updateStation, setStationPosition, addTransfer, updateTransfer, handleFrame])
 
-  const onSerialConnected = useCallback(() => {
-    initEngine()
+  const connectPort = useCallback(
+    async (name: string, config: PortConfig) => {
+      initEngine()
+      const mgr = transportMgrRef.current
+      if (!mgr) return
 
-    const serial = serialRef.current
-    if (!serial) return
-
-    const transport = new Transport(serial)
-    transportRef.current = transport
-
-    transport.setOnFrame(async (frame) => {
-      const sessionMgr = sessionMgrRef.current
-      if (sessionMgr) {
-        await sessionMgr.incoming(frame)
+      if (config.type === 'serial') {
+        await mgr.connectSerial(name, config)
+      } else if (config.type === 'ratflector') {
+        await mgr.connectRatflector(name, config)
       }
-    })
 
-    transport.setOnGpsString((text) => {
-      const fix = parseGps(text)
-      if (fix) {
-        setOwnPosition(fix)
-      }
-    })
+      // Broadcast sign-on status
+      const appConfig = useConfigStore.getState().config
+      chatRef.current?.sendStatus(appConfig.signOnMessage || 'Online (D-RATS Web)')
+    },
+    [initEngine],
+  )
 
-    transport.setOnRawText((text) => {
-      const fix = parseGps(text)
-      if (fix) {
-        setOwnPosition(fix)
-      }
-    })
-  }, [initEngine, setOwnPosition])
+  const disconnectPort = useCallback(async (name: string) => {
+    const mgr = transportMgrRef.current
+    await mgr?.disconnect(name)
+    if (activePortRef.current === name) {
+      activePortRef.current = ''
+    }
+  }, [])
 
-  const onSerialDisconnected = useCallback(() => {
-    transportRef.current = null
+  const setActivePort = useCallback((name: string) => {
+    activePortRef.current = name
   }, [])
 
   return {
-    serialRef,
-    transportRef,
+    transportMgrRef,
     sessionMgrRef,
     chatRef,
     fileRef,
-    onSerialConnected,
-    onSerialDisconnected,
-  }
+    connectPort,
+    disconnectPort,
+    setActivePort,
+  } as const
 }

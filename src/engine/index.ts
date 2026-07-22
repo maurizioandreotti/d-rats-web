@@ -1,6 +1,7 @@
 export { RadioSerial } from './serial'
 export type { RadioSerialConfig } from './serial'
 export { Transport } from './transport'
+export { AuthenticatedTransport } from './authenticated-transport'
 export { SessionManager } from './session-mgr'
 export { ChatEngine } from './chat'
 export { FileTransferEngine } from './file'
@@ -18,7 +19,6 @@ export {
   SESSION_CHAT,
 } from './ddt2'
 export { parseGps, parseNmea, parseAprs, distance, bearingTo } from './gps'
-
 export { XON, XOFF } from './serial'
 export {
   CHAT_TYPE_DEF,
@@ -28,10 +28,12 @@ export {
   CHAT_TYPE_PING_ERS,
   CHAT_TYPE_STATUS,
 } from './chat'
-
 export {
   FILE_BLOCK_SIZE,
   FILE_WINDOW_SIZE,
   FILE_MAX_RETRIES,
   FILE_MIN_TIMEOUT_MS,
 } from './file'
+export { RatflectorConnection } from './ratflector'
+export type { RatflectorStatus } from './ratflector'
+export { TransportManager } from './transport-manager'

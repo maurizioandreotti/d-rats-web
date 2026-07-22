@@ -54,14 +54,34 @@ export function getSerialApi(): NavigatorSerial | undefined {
 }
 
 export class RadioSerial {
-  static onSniff: ((direction: 'rx' | 'tx', data: Uint8Array) => void) | null = null
+  static onSniffCallbacks: Array<(direction: 'rx' | 'tx', data: Uint8Array) => void> = []
+
+  static addSniffListener(cb: (direction: 'rx' | 'tx', data: Uint8Array) => void): void {
+    RadioSerial.onSniffCallbacks.push(cb)
+  }
+
+  static removeSniffListener(cb: (direction: 'rx' | 'tx', data: Uint8Array) => void): void {
+    RadioSerial.onSniffCallbacks = RadioSerial.onSniffCallbacks.filter(c => c !== cb)
+  }
+
+  static clearSniffListeners(): void {
+    RadioSerial.onSniffCallbacks = []
+  }
 
   private port: SerialPort | null = null
   private reader: ReadableStreamDefaultReader<Uint8Array<ArrayBuffer>> | null = null
   private writer: WritableStreamDefaultWriter<Uint8Array<ArrayBuffer>> | null = null
 
-  private onData: ((data: Uint8Array) => void) | null = null
+  private onDataCallbacks: Array<(data: Uint8Array) => void> = []
   private onDisconnect: (() => void) | null = null
+
+  addDataCallback(cb: (data: Uint8Array) => void): void {
+    this.onDataCallbacks.push(cb)
+  }
+
+  removeDataCallback(cb: (data: Uint8Array) => void): void {
+    this.onDataCallbacks = this.onDataCallbacks.filter(c => c !== cb)
+  }
 
   private xonState = true
   private xoffTimeoutMs = 15000
@@ -70,7 +90,8 @@ export class RadioSerial {
   private disconnectNotified = false
 
   setOnData(cb: (data: Uint8Array) => void): void {
-    this.onData = cb
+    // Replace all (keeps existing behavior for callers that use setOnData)
+    this.onDataCallbacks = [cb]
   }
 
   setOnDisconnect(cb: () => void): void {
@@ -119,9 +140,24 @@ export class RadioSerial {
 
     this.port = port
 
+    // Set DTR and RTS — many ICOM USB cables need these for power.
+    // Retry a few times because some USB-serial drivers are flaky.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await port.setSignals({ dataTerminalReady: true, requestToSend: true })
+        console.log('[RadioSerial] setSignals(DTR=1, RTS=1) OK on attempt', attempt + 1)
+        break
+      } catch (err) {
+        console.warn('[RadioSerial] setSignals() attempt', attempt + 1, 'failed:', err)
+        await sleep(200)
+      }
+    }
+
+    // Verify DTR/RTS state by reading back (not supported by all browsers)
     try {
-      await port.setSignals({ dataTerminalReady: true, requestToSend: true })
-    } catch { /* not all implementations support setSignals */ }
+      await port.setSignals({ dataTerminalReady: true })
+      console.log('[RadioSerial] DTR re-verified')
+    } catch { /* ignore */ }
 
     port.addEventListener('disconnect', () => {
       if (!this.disconnectNotified) {
@@ -130,9 +166,14 @@ export class RadioSerial {
       }
     })
 
-    this.writer = port.writable!.getWriter()
-    this.reader = port.readable!.getReader()
+    if (!port.writable || !port.readable) {
+      throw new Error('Serial port opened but readable/writable streams not available')
+    }
 
+    this.writer = port.writable.getWriter()
+    this.reader = port.readable.getReader()
+
+    console.log('[RadioSerial] Connection established, starting read loop')
     this.startReadLoop()
   }
 
@@ -152,16 +193,24 @@ export class RadioSerial {
 
   async send(data: Uint8Array): Promise<void> {
     if (!this.writer || this.closed) {
+      console.error('[RadioSerial] send() failed: not connected')
       throw new Error('Serial port not connected')
     }
 
+    console.log('[RadioSerial] send() called with', data.length, 'bytes')
     const chunk = 8
     for (let pos = 0; pos < data.length; pos += chunk) {
       const end = Math.min(pos + chunk, data.length)
       const slice = data.subarray(pos, end)
 
-      RadioSerial.onSniff?.('tx', slice)
-      await this.writer.write(slice as Uint8Array<ArrayBuffer>)
+      for (const cb of RadioSerial.onSniffCallbacks) cb('tx', slice)
+
+      try {
+        await this.writer.write(slice as Uint8Array<ArrayBuffer>)
+      } catch (err) {
+        console.error('[RadioSerial] write() error at pos', pos, ':', err)
+        throw err
+      }
 
       const waitStart = Date.now()
       while (!this.xonState) {
@@ -176,6 +225,7 @@ export class RadioSerial {
         throw new Error('Serial port disconnected during write')
       }
     }
+    console.log('[RadioSerial] send() completed')
   }
 
   private startReadLoop(): void {
@@ -224,10 +274,13 @@ export class RadioSerial {
             }
           }
 
-          RadioSerial.onSniff?.('rx', value)
+          for (const cb of RadioSerial.onSniffCallbacks) cb('rx', value)
 
-          if (filtered.length > 0 && this.onData) {
-            this.onData(new Uint8Array(filtered))
+          if (filtered.length > 0) {
+            const filteredArr = new Uint8Array(filtered)
+            for (const cb of this.onDataCallbacks) {
+              cb(filteredArr)
+            }
           }
         } catch (err) {
           console.log('[RadioSerial] Read error:', err)

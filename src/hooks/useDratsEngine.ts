@@ -4,6 +4,7 @@ import { SessionManager } from '../engine/session-mgr'
 import { ChatEngine } from '../engine/chat'
 import { FileTransferEngine } from '../engine/file'
 import { TransportManager } from '../engine/transport-manager'
+import { SESSION_CONTROL, SESSION_CHAT } from '../engine/ddt2'
 import { useChatStore } from '../store/chat-store'
 import { usePingStore } from '../store/ping-store'
 import { useStationStore } from '../store/station-store'
@@ -32,6 +33,15 @@ export function useDratsEngine() {
       if (sessionMgr) {
         sessionMgr.heardOnPort(frame.header.sourceStation, portName)
         await sessionMgr.incoming(frame)
+      }
+
+      const { sessionId } = frame.header
+      if (sessionId === SESSION_CONTROL) return
+
+      if (sessionId === SESSION_CHAT) {
+        await chatRef.current?.handleIncoming(frame)
+      } else {
+        await fileRef.current?.handleIncoming(frame)
       }
     },
     [],

@@ -41,8 +41,13 @@ function PacketRow({ packet }: { packet: SniffedPacket }) {
 export function SnifferPanel() {
   const packets = useSnifferStore((s) => s.packets)
   const paused = useSnifferStore((s) => s.paused)
+  const capturing = useSnifferStore((s) => s.capturing)
+  const capturedPackets = useSnifferStore((s) => s.capturedPackets)
   const clearPackets = useSnifferStore((s) => s.clearPackets)
   const togglePause = useSnifferStore((s) => s.togglePause)
+  const startCapture = useSnifferStore((s) => s.startCapture)
+  const stopCapture = useSnifferStore((s) => s.stopCapture)
+  const saveCapture = useSnifferStore((s) => s.saveCapture)
   const listRef = useRef<HTMLDivElement>(null)
   const autoScroll = useRef(true)
 
@@ -70,6 +75,22 @@ export function SnifferPanel() {
           <button className="btn btn-sm btn-secondary" onClick={clearPackets}>
             Clear
           </button>
+          <div className="sniffer-capture">
+            {capturing ? (
+              <button className="btn btn-sm btn-danger" onClick={stopCapture}>
+                ⏹ Stop Capture ({capturedPackets.length})
+              </button>
+            ) : (
+              <button className="btn btn-sm btn-primary" onClick={startCapture}>
+                ⏺ Start Capture
+              </button>
+            )}
+            {!capturing && capturedPackets.length > 0 && (
+              <button className="btn btn-sm btn-success" onClick={saveCapture}>
+                💾 Save ({capturedPackets.length})
+              </button>
+            )}
+          </div>
         </div>
       </div>
 

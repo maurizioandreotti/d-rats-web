@@ -96,6 +96,12 @@ The Python project lives at `../d-rats/` for reference only:
 - `d_rats/yencode.py` → yEnc codec
 - `d_rats/crc_checksum.py` → 16-bit CRC
 
+### Wiki (project-specific documentation)
+- `docs/wiki/radio-setup.md` — Radio configuration for ICOM D-STAR models (ID-51, IC-2820, ID-5100, ID-880, etc.), ICF programming files, troubleshooting
+
+### External References
+- `https://github.com/sarahroselives/inmarscope` — D-STAR packet format reference
+
 ## Current Implementation Status
 - ✅ Serial connection (one-way: app→radio confirmed)
 - ✅ DDT2 frame encoding/decoding
@@ -104,7 +110,9 @@ The Python project lives at `../d-rats/` for reference only:
 - ✅ Station monitoring with GPS
 - ✅ Map with Leaflet
 - ✅ Data sniffer for debugging
-- ⏳ Radio→app receive path (needs testing with actual radio data)
+- ✅ Raw GPS data (APRS/GPS-A) parsed → stations + positions discovered
+- ✅ Ping All broadcasts CQCQCQ on each connected port
+- ⏳ DDT2 frame receive from radio (needs testing with actual DDT2 data)
 - ⏳ Ratflector connectivity (blocked by WSL2 WebSocket issue)
 
 ## Known Issues

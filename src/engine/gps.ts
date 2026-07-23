@@ -124,8 +124,44 @@ export function parseAprs(data: string): GPSPosition | null {
   return result
 }
 
+export function parseAprsPosition(text: string): GPSPosition | null {
+  const match = text.match(/^!(\d{2})(\d{2}\.\d+)([NS])\/(\d{3})(\d{2}\.\d+)([EW])/)
+  if (!match) return null
+
+  const latDeg = parseInt(match[1]!, 10)
+  const latMin = parseFloat(match[2]!)
+  const latDir = match[3]!
+  const lonDeg = parseInt(match[4]!, 10)
+  const lonMin = parseFloat(match[5]!)
+  const lonDir = match[6]!
+
+  let lat = latDeg + latMin / 60
+  if (latDir === 'S') lat = -lat
+
+  let lon = lonDeg + lonMin / 60
+  if (lonDir === 'W') lon = -lon
+
+  return { lat, lon, timestamp: Date.now() }
+}
+
+export function parseIcomGps(text: string): { callsign: string; position?: GPSPosition } | null {
+  const trimmed = text.trim()
+  const match = trimmed.match(/^\$\$CRC[A-Za-z0-9]{4},([A-Za-z0-9]+)>.+$/)
+  if (!match) return null
+
+  const callsign = match[1]!
+
+  const posMatch = trimmed.match(/:!(.+)$/)
+  if (!posMatch) return { callsign }
+
+  const position = parseAprsPosition('!' + posMatch[1]!)
+  if (!position) return { callsign }
+
+  return { callsign, position }
+}
+
 export function parseGps(text: string): GPSPosition | null {
-  return parseNmea(text) ?? parseAprs(text)
+  return parseNmea(text) ?? parseAprs(text) ?? parseAprsPosition(text)
 }
 
 function parseCoord(raw: string, dir: string): number {

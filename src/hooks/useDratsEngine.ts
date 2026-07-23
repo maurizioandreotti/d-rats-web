@@ -19,7 +19,6 @@ export function useDratsEngine() {
   const chatRef = useRef<ChatEngine | null>(null)
   const fileRef = useRef<FileTransferEngine | null>(null)
   const initializedRef = useRef(false)
-  const activePortRef = useRef('')
 
   const addChatMessage = useChatStore((s) => s.addMessage)
   const addPing = usePingStore((s) => s.addPing)
@@ -93,8 +92,7 @@ export function useDratsEngine() {
     sessionMgr.setOutgoingCallback(async (frame: DDT2Frame, portName?: string) => {
       const mgr = transportMgrRef.current
       if (!mgr) return
-      const port = portName || activePortRef.current
-      await mgr.sendFrame(frame, port || undefined)
+      await mgr.sendFrame(frame, portName)
     })
 
     initializedRef.current = true
@@ -122,13 +120,6 @@ export function useDratsEngine() {
   const disconnectPort = useCallback(async (name: string) => {
     const mgr = transportMgrRef.current
     await mgr?.disconnect(name)
-    if (activePortRef.current === name) {
-      activePortRef.current = ''
-    }
-  }, [])
-
-  const setActivePort = useCallback((name: string) => {
-    activePortRef.current = name
   }, [])
 
   return {
@@ -138,6 +129,5 @@ export function useDratsEngine() {
     fileRef,
     connectPort,
     disconnectPort,
-    setActivePort,
   } as const
 }

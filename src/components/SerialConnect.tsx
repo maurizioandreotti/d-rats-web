@@ -7,15 +7,13 @@ import type { PortConfig } from '../types'
 interface SerialConnectProps {
   onConnect: (name: string, config: PortConfig) => Promise<void>
   onDisconnect: (name: string) => Promise<void>
-  onPortSelected: (name: string) => void
 }
 
-export function SerialConnect({ onConnect, onDisconnect, onPortSelected }: SerialConnectProps) {
+export function SerialConnect({ onConnect, onDisconnect }: SerialConnectProps) {
   const { config, updatePort, addPort, removePort } = useConfigStore()
   const portStatuses = usePortStore((s) => s.statuses)
   const portMessages = usePortStore((s) => s.messages)
   const [connecting, setConnecting] = useState<string | null>(null)
-  const [activePort, setActivePort] = useState<string>('')
   const [showAdd, setShowAdd] = useState(false)
   const [newType, setNewType] = useState<'serial' | 'ratflector'>('serial')
   const [newName, setNewName] = useState('')
@@ -53,34 +51,20 @@ export function SerialConnect({ onConnect, onDisconnect, onPortSelected }: Seria
       try {
         await onConnect(port.name, port)
         updatePort(index, { enabled: true })
-        setActivePort(port.name)
-        onPortSelected(port.name)
       } catch {
         // error already set in store by engine
       } finally {
         setConnecting(null)
       }
     },
-    [onConnect, updatePort, onPortSelected],
+    [onConnect, updatePort],
   )
 
   const handleDisconnect = useCallback(
     async (name: string) => {
       await onDisconnect(name)
-      if (activePort === name) {
-        setActivePort('')
-        onPortSelected('')
-      }
     },
-    [onDisconnect, activePort, onPortSelected],
-  )
-
-  const handleSetActive = useCallback(
-    (name: string) => {
-      setActivePort(name)
-      onPortSelected(name)
-    },
-    [onPortSelected],
+    [onDisconnect],
   )
 
   const handleDelete = useCallback(
@@ -89,12 +73,8 @@ export function SerialConnect({ onConnect, onDisconnect, onPortSelected }: Seria
         await onDisconnect(name)
       }
       removePort(index)
-      if (activePort === name) {
-        setActivePort('')
-        onPortSelected('')
-      }
     },
-    [onDisconnect, removePort, activePort, onPortSelected, portStatuses],
+    [onDisconnect, removePort, portStatuses],
   )
 
   const handleEdit = useCallback((index: number) => {
@@ -167,10 +147,9 @@ export function SerialConnect({ onConnect, onDisconnect, onPortSelected }: Seria
           const msg = portMessages[port.name] ?? ''
           const isConnecting = connecting === port.name
           const isConnected = status === 'connected'
-          const isActive = activePort === port.name
 
           return (
-            <div key={i} className={`port-card ${isActive ? 'active' : ''}`}>
+            <div key={i} className={`port-card ${isConnected ? 'active' : ''}`}>
               <div className="port-header">
                 <span className="port-type-badge">{port.type === 'ratflector' ? 'RAT' : 'SER'}</span>
                 <span className={`status-dot ${status === 'connected' ? 'online' : status === 'connecting' ? 'warning' : status === 'error' ? 'offline' : 'unknown'}`} />
@@ -203,14 +182,9 @@ export function SerialConnect({ onConnect, onDisconnect, onPortSelected }: Seria
                     {isConnecting ? 'Connecting...' : 'Connect'}
                   </button>
                 ) : (
-                  <>
-                    <button className="btn btn-sm btn-primary" onClick={() => handleSetActive(port.name)} disabled={isActive}>
-                      {isActive ? 'Active' : 'Use'}
-                    </button>
-                    <button className="btn btn-sm btn-danger" onClick={() => handleDisconnect(port.name)}>
-                      Disconnect
-                    </button>
-                  </>
+                  <button className="btn btn-sm btn-danger" onClick={() => handleDisconnect(port.name)}>
+                    Disconnect
+                  </button>
                 )}
                 <button className="btn btn-sm btn-danger-outline" onClick={() => handleDelete(port.name, i)}>
                   Delete

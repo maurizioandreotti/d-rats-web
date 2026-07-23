@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import { useDratsEngine } from '../hooks/useDratsEngine'
+import { usePortStore } from '../store/port-store'
+import { useConfigStore } from '../store/config-store'
 import { SerialConnect } from './SerialConnect'
 import { ChatPanel } from './ChatPanel'
 import { MapPanel } from './MapPanel'
@@ -33,8 +35,19 @@ export function Layout() {
     sessionMgrRef,
     connectPort,
     disconnectPort,
-    setActivePort,
   } = useDratsEngine()
+
+  const portStatuses = usePortStore((s) => s.statuses)
+  const config = useConfigStore((s) => s.config)
+
+  const connectedPorts = config.ports.filter((p) => portStatuses[p.name] === 'connected')
+  const connectedCount = connectedPorts.length
+  const totalPorts = config.ports.length
+
+  const statusItems = connectedPorts.map((p) => {
+    const detail = p.type === 'serial' ? `${p.settings} baud` : `${p.ratflector?.host}:${p.ratflector?.port}`
+    return `${p.name}@${detail}`
+  })
 
   const renderContent = () => {
     switch (activeTab) {
@@ -43,7 +56,6 @@ export function Layout() {
           <SerialConnect
             onConnect={connectPort}
             onDisconnect={disconnectPort}
-            onPortSelected={setActivePort}
           />
         )
       case 'sniffer':
@@ -93,6 +105,19 @@ export function Layout() {
 
         <footer className="status-bar">
           <span className="status-text">D-RATS Web v0.1.0</span>
+          {connectedCount > 0 ? (
+            <span className="status-ports">
+              <span className="status-dot online" />
+              {connectedCount}/{totalPorts} connected — {statusItems.join(' | ')}
+            </span>
+          ) : totalPorts > 0 ? (
+            <span className="status-ports">
+              <span className="status-dot unknown" />
+              {totalPorts} port{totalPorts > 1 ? 's' : ''} — none connected
+            </span>
+          ) : (
+            <span className="status-ports">No ports configured</span>
+          )}
         </footer>
       </div>
     </div>

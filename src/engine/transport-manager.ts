@@ -1,8 +1,10 @@
 import { RadioSerial } from './serial'
 import { Transport } from './transport'
 import { RatflectorConnection } from './ratflector'
+import { parseIcomGps } from './gps'
 import type { DDT2Frame, PortConfig } from '../types'
 import { usePortStore } from '../store/port-store'
+import { useStationStore } from '../store/station-store'
 
 export type FrameHandler = (frame: DDT2Frame, portName: string) => void
 
@@ -13,6 +15,63 @@ export class TransportManager {
 
   setOnFrame(handler: FrameHandler): void {
     this.onFrame = handler
+  }
+
+  private handleRawGps(text: string, portName: string): void {
+    const parsed = parseIcomGps(text)
+    if (!parsed) return
+
+    useStationStore.getState().updateStation(parsed.callsign, {
+      lastHeard: Date.now(),
+    })
+
+    if (parsed.position) {
+      useStationStore.getState().setStationPosition(parsed.callsign, parsed.position)
+    }
+
+    if (this.onFrame) {
+      const frame: DDT2Frame = {
+        header: {
+          magic: 0x22,
+          seq: 0,
+          sessionId: 1,
+          type: 0,
+          checksum: 0,
+          length: text.length,
+          sourceStation: parsed.callsign,
+          destStation: 'CQCQCQ',
+        },
+        data: new TextEncoder().encode(text),
+      }
+      this.onFrame(frame, portName)
+    }
+  }
+
+  private handleRawText(text: string, portName: string): void {
+    const callMatch = text.match(/([A-Z]{1,2}\d[A-Z]{1,3})(?:-\d{1,2})?/)
+    if (!callMatch) return
+
+    const callsign = callMatch[1]!
+    useStationStore.getState().updateStation(callsign, {
+      lastHeard: Date.now(),
+    })
+
+    if (this.onFrame) {
+      const frame: DDT2Frame = {
+        header: {
+          magic: 0x22,
+          seq: 0,
+          sessionId: 1,
+          type: 0,
+          checksum: 0,
+          length: text.length,
+          sourceStation: callsign,
+          destStation: 'CQCQCQ',
+        },
+        data: new TextEncoder().encode(text),
+      }
+      this.onFrame(frame, portName)
+    }
   }
 
   get connectedPorts(): string[] {
@@ -39,6 +98,8 @@ export class TransportManager {
       const transport = new Transport(serial)
 
       transport.setOnFrame((frame) => this.onFrame?.(frame, name))
+      transport.setOnGpsString((text) => this.handleRawGps(text, name))
+      transport.setOnRawText((text) => this.handleRawText(text, name))
 
       const baudRate = config.serial?.baudRate ?? 9600
       await serial.connect(port, {

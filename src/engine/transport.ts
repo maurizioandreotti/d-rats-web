@@ -38,7 +38,11 @@ export class Transport {
     const gpsText = this.matchGps()
     if (gpsText) {
       this.onGpsString?.(gpsText)
-      this.onRawText?.(gpsText)
+    }
+
+    const rawText = this.matchRawText()
+    if (rawText) {
+      this.onRawText?.(rawText)
     }
   }
 
@@ -90,6 +94,16 @@ export class Transport {
     }
 
     return null
+  }
+
+  private matchRawText(): string | null {
+    const text = new TextDecoder().decode(this.buffer)
+    const lineMatch = text.match(/^([^\r]{2,})\r/)
+    if (!lineMatch) return null
+
+    const rawText = lineMatch[1]!
+    this.buffer = new TextEncoder().encode(text.replace(rawText + '\r', ''))
+    return rawText
   }
 
   get hasBufferedData(): boolean {

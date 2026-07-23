@@ -162,6 +162,7 @@ export class RadioSerial {
     port.addEventListener('disconnect', () => {
       if (!this.disconnectNotified) {
         this.disconnectNotified = true
+        this.closed = true
         this.onDisconnect?.()
       }
     })
@@ -171,7 +172,6 @@ export class RadioSerial {
     }
 
     this.writer = port.writable.getWriter()
-    this.reader = port.readable.getReader()
 
     console.log('[RadioSerial] Connection established, starting read loop')
     this.startReadLoop()
@@ -239,11 +239,16 @@ export class RadioSerial {
 
       // Poll: some Chrome versions need delay before readable is ready
       if (!this.reader && this.port) {
-        for (let i = 0; i < 50; i++) {
+        for (let i = 0; i < 100; i++) {
           await sleep(100)
+          if (this.closed) {
+            console.log('[RadioSerial] Poll aborted: closed')
+            this.readLoopActive = false
+            return
+          }
           if (this.port.readable) {
             this.reader = this.port.readable.getReader()
-            console.log('[RadioSerial] Reader obtained after poll')
+            console.log('[RadioSerial] Reader obtained after poll (attempt', i + 1, ')')
             break
           }
         }
@@ -284,17 +289,20 @@ export class RadioSerial {
           }
         } catch (err) {
           console.log('[RadioSerial] Read error:', err)
-          if (!this.closed) {
-            if (!this.disconnectNotified) {
-              this.disconnectNotified = true
-              this.onDisconnect?.()
-            }
-          }
           break
         }
       }
+
       console.log('[RadioSerial] Read loop ended')
+      this.reader = null
       this.readLoopActive = false
+
+      // Auto-restart if still connected
+      if (!this.closed && this.port) {
+        console.log('[RadioSerial] Restarting read loop in 500ms...')
+        await sleep(500)
+        this.startReadLoop()
+      }
     }
 
     loop()

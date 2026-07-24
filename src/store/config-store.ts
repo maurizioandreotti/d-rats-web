@@ -55,6 +55,7 @@ const DEFAULT_CONFIG: AppConfig = {
   mapCenter: [41.9, 12.5],
   mapZoom: 8,
   myPosition: undefined,
+  autoConnect: false,
 }
 
 export const useConfigStore = create<ConfigState>()(

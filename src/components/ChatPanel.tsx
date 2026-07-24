@@ -10,7 +10,8 @@ interface ChatPanelProps {
 }
 
 export function ChatPanel({ chatRef }: ChatPanelProps) {
-  const messages = useChatStore((s) => s.messages)
+  const allMessages = useChatStore((s) => s.messages)
+  const messages = allMessages.filter((m) => !m.type || m.type === 'chat')
   const config = useConfigStore((s) => s.config)
   const portStatuses = usePortStore((s) => s.statuses)
   const [input, setInput] = useState('')
@@ -45,6 +46,7 @@ export function ChatPanel({ chatRef }: ChatPanelProps) {
       timestamp: Date.now(),
       direction: 'outgoing',
       port: selectedPort || undefined,
+      type: 'chat',
     })
     setInput('')
 
@@ -62,7 +64,10 @@ export function ChatPanel({ chatRef }: ChatPanelProps) {
 
   return (
     <div className="chat-layout">
-      <h2>Chat</h2>
+      <div className="chat-layout-header">
+        <h2>Chat</h2>
+        <button className="btn-sm btn-danger" onClick={() => { if (window.confirm('Clear all chat messages?')) useChatStore.getState().clearMessages() }}>Clear</button>
+      </div>
 
       {connectedPorts.length > 0 && (
         <div className="chat-channels">

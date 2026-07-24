@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useState, useCallback } from 'react'
 import { useDratsEngine } from '../hooks/useDratsEngine'
 import { usePortStore } from '../store/port-store'
 import { useConfigStore } from '../store/config-store'
+import { useStationStore } from '../store/station-store'
 import { SerialConnect } from './SerialConnect'
 import { ChatPanel } from './ChatPanel'
 import { MapPanel } from './MapPanel'
@@ -11,6 +12,7 @@ import { EventLog } from './EventLog'
 import { ConfigPanel } from './ConfigPanel'
 import { SnifferPanel } from './SnifferPanel'
 import { PingPanel } from './PingPanel'
+import { WikiPanel } from './WikiPanel'
 
 interface TabDef {
   id: string
@@ -21,11 +23,12 @@ const TABS: TabDef[] = [
   { id: 'radio', label: 'Radio' },
   { id: 'chat', label: 'Chat' },
   { id: 'files', label: 'Files' },
-  { id: 'sniffer', label: 'Sniffer' },
   { id: 'ping', label: 'Pings' },
   { id: 'map', label: 'Map' },
   { id: 'events', label: 'Events' },
+  { id: 'sniffer', label: 'Sniffer' },
   { id: 'config', label: 'Config' },
+  { id: 'wiki', label: 'Wiki' },
 ]
 
 export function Layout() {
@@ -39,10 +42,21 @@ export function Layout() {
 
   const portStatuses = usePortStore((s) => s.statuses)
   const config = useConfigStore((s) => s.config)
+  const stations = useStationStore((s) => s.stations)
 
   const connectedPorts = config.ports.filter((p) => portStatuses[p.name] === 'connected')
   const connectedCount = connectedPorts.length
   const totalPorts = config.ports.length
+
+  const handleShowOnMap = useCallback((callsign: string) => {
+    const station = stations[callsign]
+    if (station?.position) {
+      useConfigStore.getState().updateConfig({
+        focusCenter: [station.position.lat, station.position.lon],
+      })
+    }
+    setActiveTab('map')
+  }, [stations])
 
   const statusItems = connectedPorts.map((p) => {
     const detail = p.type === 'serial' ? `${p.settings} baud` : `${p.ratflector?.host}:${p.ratflector?.port}`
@@ -70,6 +84,8 @@ export function Layout() {
         return <FileTransfer />
       case 'events':
         return <EventLog />
+      case 'wiki':
+        return <WikiPanel />
       case 'config':
         return <ConfigPanel />
       default:
@@ -84,7 +100,7 @@ export function Layout() {
           <h2>Stations</h2>
         </div>
         <div className="stations-panel-content">
-          <StationsList chatRef={chatRef} sessionMgrRef={sessionMgrRef} />
+          <StationsList chatRef={chatRef} sessionMgrRef={sessionMgrRef} onShowOnMap={handleShowOnMap} />
         </div>
       </aside>
 

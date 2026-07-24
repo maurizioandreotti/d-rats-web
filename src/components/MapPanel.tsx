@@ -6,43 +6,42 @@ import { useStationStore } from '../store/station-store'
 import { useConfigStore } from '../store/config-store'
 import { StationStatus } from '../types'
 
-L.Icon.Default.mergeOptions({
-  iconRetinaUrl: 'https://unpkg.com/leaflet@1.9/dist/images/marker-icon-2x.png',
-  iconUrl: 'https://unpkg.com/leaflet@1.9/dist/images/marker-icon.png',
-  shadowUrl: 'https://unpkg.com/leaflet@1.9/dist/images/marker-shadow.png',
+const ownIcon = (callsign: string) => new L.DivIcon({
+  html: `<div style="display:flex;flex-direction:column;align-items:center;"><div style="background:#4a90d9;width:16px;height:16px;border-radius:50%;border:3px solid white;box-shadow:0 1px 4px rgba(0,0,0,0.4);"></div><span style="margin-top:2px;padding:1px 4px;font-size:10px;font-weight:700;color:#fff;background:rgba(0,0,0,0.55);border-radius:3px;white-space:nowrap;line-height:1.3;">${callsign}</span></div>`,
+  iconSize: [28, 44],
+  iconAnchor: [14, 32],
+  popupAnchor: [0, -32],
+  className: '',
 })
 
-const ownIcon = new L.DivIcon({
-  html: '<div style="background:#4a90d9;width:16px;height:16px;border-radius:50%;border:3px solid white;box-shadow:0 1px 4px rgba(0,0,0,0.4)"></div>',
-  iconSize: [22, 22],
-  iconAnchor: [11, 11],
-  popupAnchor: [0, -11],
+const stationIcon = (callsign: string) => new L.DivIcon({
+  html: `<div style="display:flex;flex-direction:column;align-items:center;"><div style="background:#e8a838;width:14px;height:14px;border-radius:50%;border:2px solid white;box-shadow:0 1px 4px rgba(0,0,0,0.4);"></div><span style="margin-top:2px;padding:1px 4px;font-size:10px;font-weight:600;color:#fff;background:rgba(0,0,0,0.55);border-radius:3px;white-space:nowrap;line-height:1.3;">${callsign}</span></div>`,
+  iconSize: [28, 44],
+  iconAnchor: [14, 32],
+  popupAnchor: [0, -32],
   className: '',
 })
 
 function MapController() {
   const map = useMap()
-  const ownPosition = useStationStore((s) => s.ownPosition)
-  const setOwnPosition = useStationStore((s) => s.setOwnPosition)
-  const prevPos = useRef(ownPosition)
-  const config = useConfigStore((s) => s.config)
+  const myPosition = useConfigStore((s) => s.config.myPosition)
+  const focusCenter = useConfigStore((s) => s.config.focusCenter)
   const updateConfig = useConfigStore((s) => s.updateConfig)
-  const initializedPos = useRef(false)
+  const prevPos = useRef(myPosition)
 
   useEffect(() => {
-    if (config.myPosition && !ownPosition && !initializedPos.current) {
-      setOwnPosition(config.myPosition)
+    if (myPosition && myPosition !== prevPos.current) {
+      map.setView([myPosition.lat, myPosition.lon], map.getZoom())
+      prevPos.current = myPosition
     }
-    initializedPos.current = true
-  }, [])
+  }, [myPosition, map])
 
   useEffect(() => {
-    if (ownPosition && ownPosition !== prevPos.current) {
-      map.setView([ownPosition.lat, ownPosition.lon], map.getZoom())
-      prevPos.current = ownPosition
-      updateConfig({ myPosition: ownPosition })
+    if (focusCenter) {
+      map.setView(focusCenter, 12)
+      updateConfig({ focusCenter: undefined })
     }
-  }, [ownPosition, map, updateConfig])
+  }, [focusCenter, map, updateConfig])
 
   useMapEvents({
     moveend() {
@@ -52,16 +51,6 @@ function MapController() {
     },
   })
 
-  return null
-}
-
-function MapClickHandler() {
-  useMapEvents({
-    click(e) {
-      useStationStore.getState().setOwnPosition({ lat: e.latlng.lat, lon: e.latlng.lng })
-      useConfigStore.getState().updateConfig({ myPosition: { lat: e.latlng.lat, lon: e.latlng.lng } })
-    },
-  })
   return null
 }
 
@@ -78,10 +67,7 @@ function LocateButton() {
         e.stopPropagation()
         navigator.geolocation.getCurrentPosition(
           (pos) => {
-            const lat = pos.coords.latitude
-            const lon = pos.coords.longitude
-            const position = { lat, lon, timestamp: Date.now() }
-            useStationStore.getState().setOwnPosition(position)
+            const position = { lat: pos.coords.latitude, lon: pos.coords.longitude, timestamp: Date.now() }
             useConfigStore.getState().updateConfig({ myPosition: position })
           },
           (err) => {
@@ -109,27 +95,24 @@ const STATUS_LABEL: Record<number, string> = {
 
 export function MapPanel() {
   const stations = useStationStore((s) => s.stations)
-  const ownPosition = useStationStore((s) => s.ownPosition)
-  const setOwnPosition = useStationStore((s) => s.setOwnPosition)
-  const updateConfig = useConfigStore((s) => s.updateConfig)
   const config = useConfigStore((s) => s.config)
+  const updateConfig = useConfigStore((s) => s.updateConfig)
 
+  const myPosition = config.myPosition
   const stationList = Object.values(stations).filter((s) => s.position)
 
   const handleDragEnd = useCallback((e: L.LeafletEvent) => {
     const marker = e.target
     const pos = marker.getLatLng()
-    const position = { lat: pos.lat, lon: pos.lng, timestamp: Date.now() }
-    setOwnPosition(position)
-    updateConfig({ myPosition: position })
-  }, [setOwnPosition, updateConfig])
+    updateConfig({ myPosition: { lat: pos.lat, lon: pos.lng, timestamp: Date.now() } })
+  }, [updateConfig])
 
   return (
     <div>
       <h2>Map</h2>
       <div className="map-container">
         <MapContainer
-          center={ownPosition ? [ownPosition.lat, ownPosition.lon] : config.mapCenter}
+          center={myPosition ? [myPosition.lat, myPosition.lon] : config.mapCenter}
           zoom={config.mapZoom}
           className="map-inner"
         >
@@ -138,28 +121,27 @@ export function MapPanel() {
             url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
           />
           <MapController />
-          <MapClickHandler />
           <LocateButton />
 
-          {ownPosition && (
+          {myPosition && (
             <Marker
-              position={[ownPosition.lat, ownPosition.lon]}
-              icon={ownIcon}
+              position={[myPosition.lat, myPosition.lon]}
+              icon={ownIcon(config.myCallsign || 'ME')}
               draggable={true}
               eventHandlers={{ dragend: handleDragEnd }}
             >
               <Popup>
-                <strong>My Position</strong>
+                <strong>{config.myCallsign || 'My Position'}</strong>
                 <br />
-                {ownPosition.lat.toFixed(4)}, {ownPosition.lon.toFixed(4)}
+                {myPosition.lat.toFixed(4)}, {myPosition.lon.toFixed(4)}
                 <br />
-                <em>Drag to adjust, or click anywhere on the map</em>
+                <em>Drag to adjust</em>
               </Popup>
             </Marker>
           )}
 
           {stationList.map((s) => (
-            <Marker key={s.callsign} position={[s.position!.lat, s.position!.lon]}>
+            <Marker key={s.callsign} position={[s.position!.lat, s.position!.lon]} icon={stationIcon(s.callsign)}>
               <Popup>
                 <strong>{s.callsign}</strong>
                 <br />
@@ -178,7 +160,8 @@ export function MapPanel() {
       </div>
 
       <p className="note">
-        Click on the map to place your position, or use the 📍 button for GPS location.
+        Drag marker to adjust position, or use the 📍 button for GPS location.
+        Set coordinates in the Config tab.
       </p>
     </div>
   )

@@ -1,5 +1,22 @@
-import { useRef, useEffect } from 'react'
+import { useRef, useEffect, useMemo } from 'react'
 import { useSnifferStore, type SniffedPacket } from '../store/sniffer-store'
+
+const SOB_MARKER = new Uint8Array([0xDD, 0xDD, 0xDD, 0xDD])
+const EOB_MARKER = new Uint8Array([0xEE, 0xEE, 0xEE, 0xEE])
+
+function detectType(data: Uint8Array): string {
+  const text = new TextDecoder().decode(data.slice(0, 60))
+  if (data.length >= 4) {
+    const head = data.slice(0, 4)
+    if (head.every((b, i) => b === SOB_MARKER[i])) return 'ddt2'
+    if (head.every((b, i) => b === EOB_MARKER[i])) return 'eob'
+  }
+  if (text.startsWith('$$CRC')) return 'gpsa'
+  if (text.startsWith('$GP')) return 'nmea'
+  const printable = data.filter(b => b >= 0x20 && b <= 0x7e).length
+  if (printable > data.length * 0.7 && data.length > 4) return 'text'
+  return 'data'
+}
 
 function formatHex(data: Uint8Array): string {
   const bytes: string[] = []
@@ -21,6 +38,7 @@ function formatAscii(data: Uint8Array): string {
 function PacketRow({ packet }: { packet: SniffedPacket }) {
   const hex = formatHex(packet.data)
   const ascii = formatAscii(packet.data)
+  const type = detectType(packet.data)
   const time = new Date(packet.timestamp).toLocaleTimeString('it-IT', { hour12: false }) +
     '.' + String(packet.timestamp % 1000).padStart(3, '0')
 
@@ -28,12 +46,19 @@ function PacketRow({ packet }: { packet: SniffedPacket }) {
   const cls = packet.direction === 'rx' ? 'sniff-rx' : 'sniff-tx'
 
   return (
-    <div className={`sniff-row ${cls}`}>
+    <div className={`sniff-row ${cls} sniff-${type}`}>
       <span className="sniff-time">{time}</span>
       <span className="sniff-dir">{marker}</span>
       <span className="sniff-len">{packet.data.length}B</span>
-      <span className="sniff-hex">{hex}</span>
-      <span className="sniff-ascii">{ascii}</span>
+      <span className={`sniff-type`}>{type}</span>
+      {type === 'text' || type === 'gpsa' || type === 'nmea' ? (
+        <span className="sniff-text">{new TextDecoder().decode(packet.data)}</span>
+      ) : (
+        <>
+          <span className="sniff-hex">{hex}</span>
+          <span className="sniff-ascii">{ascii}</span>
+        </>
+      )}
     </div>
   )
 }
@@ -63,6 +88,15 @@ export function SnifferPanel() {
     autoScroll.current = el.scrollTop + el.clientHeight >= el.scrollHeight - 100
   }
 
+  const typeCounts = useMemo(() => {
+    const counts: Record<string, number> = {}
+    for (const p of packets) {
+      const t = detectType(p.data)
+      counts[t] = (counts[t] || 0) + 1
+    }
+    return counts
+  }, [packets])
+
   return (
     <div className="sniffer-layout">
       <div className="sniffer-header">
@@ -78,11 +112,11 @@ export function SnifferPanel() {
           <div className="sniffer-capture">
             {capturing ? (
               <button className="btn btn-sm btn-danger" onClick={stopCapture}>
-                ⏹ Stop Capture ({capturedPackets.length})
+                ⏹ Stop ({capturedPackets.length})
               </button>
             ) : (
               <button className="btn btn-sm btn-primary" onClick={startCapture}>
-                ⏺ Start Capture
+                ⏺ Capture
               </button>
             )}
             {!capturing && capturedPackets.length > 0 && (
@@ -98,8 +132,20 @@ export function SnifferPanel() {
         <span className="sniff-time">Time</span>
         <span className="sniff-dir">D</span>
         <span className="sniff-len">Len</span>
-        <span className="sniff-hex">Hex dump</span>
-        <span className="sniff-ascii">ASCII</span>
+        <span className="sniff-type">Type</span>
+        <span className="sniff-hex">Data</span>
+      </div>
+
+      <div className="sniff-legend">
+        <span className="legend-item legend-ddt2">DDT2</span>
+        <span className="legend-item legend-gpsa">GPS‑A</span>
+        <span className="legend-item legend-nmea">NMEA</span>
+        <span className="legend-item legend-text">Text</span>
+        <span className="legend-item legend-data">Binary</span>
+        <span className="legend-item legend-eob">EOB</span>
+        {Object.entries(typeCounts).map(([t, c]) => (
+          <span key={t} className="legend-count">{t}={c}</span>
+        ))}
       </div>
 
       <div className="sniff-list" ref={listRef} onScroll={handleScroll}>

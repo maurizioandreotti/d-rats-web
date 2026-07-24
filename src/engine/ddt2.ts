@@ -19,8 +19,9 @@ function padCallsign(call: string): Uint8Array {
 }
 
 function trimCallsign(bytes: Uint8Array<ArrayBuffer>): string {
+  const cleaned = bytes.filter((b) => b !== 0x00 && b !== 0x20 && b !== 0x7e)
   const decoder = new TextDecoder()
-  return decoder.decode(bytes).replace(/~/g, '')
+  return decoder.decode(cleaned)
 }
 
 export async function encodeFrame(

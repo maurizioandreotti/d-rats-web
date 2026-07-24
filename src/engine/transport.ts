@@ -98,11 +98,11 @@ export class Transport {
 
   private matchRawText(): string | null {
     const text = new TextDecoder().decode(this.buffer)
-    const lineMatch = text.match(/^([^\r]{2,})\r/)
+    const lineMatch = text.match(/^([^\r\n]{5,})\r?\n?/)
     if (!lineMatch) return null
 
     const rawText = lineMatch[1]!
-    this.buffer = new TextEncoder().encode(text.replace(rawText + '\r', ''))
+    this.buffer = new TextEncoder().encode(text.replace(lineMatch[0], ''))
     return rawText
   }
 

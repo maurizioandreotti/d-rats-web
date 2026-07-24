@@ -1,4 +1,4 @@
-import { useCallback, useRef } from 'react'
+import { useCallback, useRef, useEffect } from 'react'
 import type { PortConfig } from '../types'
 import { SessionManager } from '../engine/session-mgr'
 import { ChatEngine } from '../engine/chat'
@@ -10,6 +10,7 @@ import { usePingStore } from '../store/ping-store'
 import { useStationStore } from '../store/station-store'
 import { useFileStore } from '../store/file-store'
 import { useConfigStore } from '../store/config-store'
+import { useEventStore } from '../store/event-store'
 import type { DDT2Frame } from '../types'
 import { StationStatus } from '../types'
 
@@ -34,8 +35,20 @@ export function useDratsEngine() {
         await sessionMgr.incoming(frame)
       }
 
+      useStationStore.getState().updateStation(frame.header.sourceStation, {
+        lastHeard: Date.now(),
+      })
+
       const { sessionId } = frame.header
       if (sessionId === SESSION_CONTROL) return
+
+      const direction = frame.header.sourceStation !== config.myCallsign ? 'incoming' : 'outgoing'
+
+      useEventStore.getState().addEvent({
+        time: Date.now(),
+        text: `[Frame] ${direction === 'incoming' ? '←' : '→'} session=${sessionId} ${frame.header.sourceStation} → ${frame.header.destStation}`,
+        type: 'frame',
+      })
 
       if (sessionId === SESSION_CHAT) {
         await chatRef.current?.handleIncoming(frame)
@@ -43,7 +56,7 @@ export function useDratsEngine() {
         await fileRef.current?.handleIncoming(frame)
       }
     },
-    [],
+    [config.myCallsign],
   )
 
   const initEngine = useCallback(() => {
@@ -60,10 +73,20 @@ export function useDratsEngine() {
     chat.setPingInfo(config.pingInfo)
     chat.setOnMessage((from, to, text) => {
       const id = crypto.randomUUID()
-      addChatMessage({ id, from, to, text, timestamp: Date.now(), direction: 'incoming' })
+      addChatMessage({ id, from, to, text, timestamp: Date.now(), direction: 'incoming', type: 'chat' })
+      useEventStore.getState().addEvent({
+        time: Date.now(),
+        text: `[Chat] ← ${from} → ${to}: ${text.substring(0, 80)}`,
+        type: 'chat-in',
+      })
     })
     chat.setOnPing((from, to, type, data) => {
       addPing({ from, to, type: type as 'request' | 'response' | 'echo_request' | 'echo_response', data, timestamp: Date.now() })
+      useEventStore.getState().addEvent({
+        time: Date.now(),
+        text: `[Ping] ${from} → ${to} (${type})`,
+        type: 'ping',
+      })
     })
     chat.setOnGpsFix((from, lat, lon) => {
       setStationPosition(from, { lat, lon, timestamp: Date.now() })
@@ -121,6 +144,23 @@ export function useDratsEngine() {
     const mgr = transportMgrRef.current
     await mgr?.disconnect(name)
   }, [])
+
+  const autoConnectRan = useRef(false)
+
+  useEffect(() => {
+    if (autoConnectRan.current) return
+    if (!config.autoConnect) return
+
+    const enabledPorts = config.ports.filter((p) => p.enabled)
+    if (enabledPorts.length === 0) return
+
+    autoConnectRan.current = true
+    for (const port of enabledPorts) {
+      connectPort(port.name, port).catch((err) => {
+        console.error(`[AutoConnect] ${port.name}:`, err)
+      })
+    }
+  }, [config.autoConnect, config.ports, connectPort])
 
   return {
     transportMgrRef,

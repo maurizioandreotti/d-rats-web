@@ -26,7 +26,7 @@ Port the D-RATS GTK desktop application to a browser-based PWA using React + Typ
 
 ### UI Layer (`src/components/`)
 - `Layout.tsx` — Tab-based layout with station sidebar
-- `ChatPanel.tsx` — Multi-port chat with channel badges
+- `ChatPanel.tsx` — Multi-port chat with channel badges; incoming messages have blue left border, outgoing have green left border
 - `StationsList.tsx` — Heard stations with Ping All
 - `MapPanel.tsx` — Leaflet.js map with station markers
 - `SnifferPanel.tsx` — Real-time hex/ASCII view of RX/TX data

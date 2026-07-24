@@ -1,5 +1,23 @@
 # Radio Setup for D-RATS
 
+## Table of Contents
+
+- [General Notes](#general-notes)
+- [ICOM ID-51A / ID-51E / ID-51A+](#icom-id-51a--id-51e--id-51a)
+- [ICOM ID-31A](#icom-id-31a)
+- [ICOM IC-2820H](#icom-ic-2820h)
+- [ICOM ID-5100](#icom-id-5100)
+- [ICOM ID-880H](#icom-id-880h)
+- [ICOM IC-80AD](#icom-ic-80ad)
+- [ICOM ID-800H](#icom-id-800h)
+- [ICOM IC-91AD / IC-92AD](#icom-ic-91ad--ic-92ad)
+- [ICOM ID-1](#icom-id-1)
+- [ICOM IC-V82 / IC-U82](#icom-ic-v82--ic-u82)
+- [ICOM IC-2200](#icom-ic-2200)
+- [Kenwood Radios](#kenwood-radios)
+- [Ratflector (Cross-Brand Gateway)](#ratflector-cross-brand-gateway)
+- [ICF Programming Files](#icf-programming-files)
+
 ## ICOM D-STAR Radios
 
 ### General Notes
@@ -129,20 +147,3 @@ The `support-material/` directory contains ICF (Icom CSV Format) files for CS-51
 
 These can be loaded into the CS-51/CS-5100 software and written to the radio via the programming cable.
 
-## Troubleshooting
-
-### No data from radio
-1. Check DTR/RTS: the app logs `[RadioSerial] setSignals(DTR=1, RTS=1) OK` in console. If it fails, the USB dongle may not need DTR — connect should still work.
-2. Verify DV Data TX = AUTO in radio menu
-3. Power-cycle the radio after connecting USB — some ICOM radios need a cold start to enable the data port
-4. Check the sniffer panel for RX packets. If only XOFF (0x13) and XON (0x11) bytes appear, the radio serial link is alive but no data frames are arriving.
-
-### GPS positions not appearing
-1. The transmitting station must have GPS enabled and GPS TX set to DV-G
-2. GPS-A (DV-A) format is D-PRS — not currently parsed by the app
-3. Raw `$$CRC` frames will appear in the sniffer as RX packets if they arrive
-
-### Ping not getting response
-1. The target station must be running D-RATS (or this web app) on their radio
-2. D-RATS ping is an application-level protocol over DDT2 frames, not a radio feature
-3. Verify the target radio is configured with DV Data TX = AUTO to pass DDT2 frames

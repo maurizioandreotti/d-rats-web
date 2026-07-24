@@ -57,7 +57,10 @@ export class ChatEngine {
 
     switch (type) {
       case CHAT_TYPE_DEF: {
-        this.onMessage?.(sourceStation, destStation, text)
+        // Skip displaying GPS/NMEA data as chat messages
+        if (!text.startsWith('$GP') && !text.startsWith('$$CRC')) {
+          this.onMessage?.(sourceStation, destStation, text)
+        }
         const fix = parseGps(text)
         if (fix) {
           this.onGpsFix?.(sourceStation, fix.lat, fix.lon)

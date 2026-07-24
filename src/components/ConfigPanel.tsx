@@ -1,20 +1,69 @@
 import { useConfigStore } from '../store/config-store'
-import { useStationStore } from '../store/station-store'
-import { useEffect } from 'react'
+import { useState, useRef, useCallback } from 'react'
+import { MapContainer, TileLayer, useMapEvents } from 'react-leaflet'
+import 'leaflet/dist/leaflet.css'
+
+function PickerMap({ onPick }: { onPick: (lat: number, lon: number) => void }) {
+  useMapEvents({
+    click(e) {
+      onPick(e.latlng.lat, e.latlng.lng)
+    },
+  })
+  return null
+}
 
 export function ConfigPanel() {
   const { config, updateConfig, resetConfig } = useConfigStore()
-  const ownPosition = useStationStore((s) => s.ownPosition)
-  const setOwnPosition = useStationStore((s) => s.setOwnPosition)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [showPicker, setShowPicker] = useState(false)
+  const myPos = config.myPosition
 
-  useEffect(() => {
-    if (ownPosition) {
-      const { lat, lon } = ownPosition
-      if (config.myPosition?.lat !== lat || config.myPosition?.lon !== lon) {
-        updateConfig({ myPosition: { lat, lon, timestamp: Date.now() } })
+  const handleExport = () => {
+    const json = JSON.stringify(config, null, 2)
+    const blob = new Blob([json], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'd-rats-config.json'
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const handleImport = () => {
+    fileInputRef.current?.click()
+  }
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (ev) => {
+      try {
+        const parsed = JSON.parse(ev.target?.result as string)
+        updateConfig(parsed)
+      } catch (err) {
+        console.error('[ConfigPanel] Failed to parse config file:', err)
+        alert('Invalid configuration file')
       }
     }
-  }, [ownPosition, config.myPosition, updateConfig])
+    reader.readAsText(file)
+    e.target.value = ''
+  }
+
+  const setLat = useCallback((lat: number) => {
+    const lon = config.myPosition?.lon ?? config.mapCenter[1]
+    updateConfig({ myPosition: { lat, lon, timestamp: Date.now() } })
+  }, [config, updateConfig])
+
+  const setLon = useCallback((lon: number) => {
+    const lat = config.myPosition?.lat ?? config.mapCenter[0]
+    updateConfig({ myPosition: { lat, lon, timestamp: Date.now() } })
+  }, [config, updateConfig])
+
+  const handlePick = useCallback((lat: number, lon: number) => {
+    updateConfig({ myPosition: { lat, lon, timestamp: Date.now() } })
+    setShowPicker(false)
+  }, [updateConfig])
 
   return (
     <div>
@@ -73,6 +122,15 @@ export function ConfigPanel() {
             placeholder="e.g. Running D-RATS Web"
           />
         </div>
+        <div className="form-row">
+          <label htmlFor="autoconnect">Auto-Connect at Launch</label>
+          <input
+            id="autoconnect"
+            type="checkbox"
+            checked={config.autoConnect}
+            onChange={(e) => updateConfig({ autoConnect: e.target.checked })}
+          />
+        </div>
       </div>
 
       <div className="panel-card">
@@ -107,12 +165,8 @@ export function ConfigPanel() {
             id="myLat"
             type="number"
             step="0.0001"
-            value={ownPosition?.lat ?? config.mapCenter[0]}
-            onChange={(e) => {
-              const lat = Number(e.target.value)
-              const lon = ownPosition?.lon ?? config.mapCenter[1]
-              setOwnPosition({ lat, lon })
-            }}
+            value={myPos?.lat ?? ''}
+            onChange={(e) => setLat(Number(e.target.value))}
           />
         </div>
         <div className="form-row">
@@ -121,14 +175,13 @@ export function ConfigPanel() {
             id="myLon"
             type="number"
             step="0.0001"
-            value={ownPosition?.lon ?? config.mapCenter[1]}
-            onChange={(e) => {
-              const lon = Number(e.target.value)
-              const lat = ownPosition?.lat ?? config.mapCenter[0]
-              setOwnPosition({ lat, lon })
-            }}
+            value={myPos?.lon ?? ''}
+            onChange={(e) => setLon(Number(e.target.value))}
           />
         </div>
+        <button className="btn btn-secondary" onClick={() => setShowPicker(true)}>
+          Pick on Map
+        </button>
         <div className="form-row">
           <label htmlFor="mapLat">Default Latitude</label>
           <input
@@ -164,17 +217,45 @@ export function ConfigPanel() {
             onChange={(e) => updateConfig({ mapZoom: Number(e.target.value) })}
           />
         </div>
-        <p className="note">
-          My Position is set on the Map tab (click, drag, or 📍 button).
-          Default center is used when no position is set.
-        </p>
       </div>
 
       <div className="button-row">
+        <input ref={fileInputRef} type="file" accept=".json" style={{ display: 'none' }} onChange={handleFileChange} />
+        <button className="btn btn-secondary" onClick={handleExport}>
+          Export Config
+        </button>
+        <button className="btn btn-secondary" onClick={handleImport}>
+          Load Config
+        </button>
         <button className="btn btn-secondary" onClick={resetConfig}>
           Reset to Defaults
         </button>
       </div>
+
+      {showPicker && (
+        <div className="modal-overlay" onClick={() => setShowPicker(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Pick your position on the map</h3>
+              <button className="btn btn-sm" onClick={() => setShowPicker(false)}>Close</button>
+            </div>
+            <div className="modal-map">
+              <MapContainer
+                center={myPos ? [myPos.lat, myPos.lon] : config.mapCenter}
+                zoom={config.mapZoom}
+                className="map-inner"
+              >
+                <TileLayer
+                  attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+                  url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+                />
+                <PickerMap onPick={handlePick} />
+              </MapContainer>
+            </div>
+            <p className="note">Click anywhere on the map to set your position.</p>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

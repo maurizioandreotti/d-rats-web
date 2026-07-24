@@ -32,6 +32,7 @@ export interface ChatMessage {
   timestamp: number
   direction: 'incoming' | 'outgoing'
   port?: string
+  type?: 'chat' | 'status' | 'system'
 }
 
 export interface DDT2Header {
@@ -118,4 +119,6 @@ export interface AppConfig {
   mapCenter: [number, number]
   mapZoom: number
   myPosition?: GPSPosition
+  focusCenter?: [number, number]
+  autoConnect: boolean
 }

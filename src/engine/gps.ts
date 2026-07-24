@@ -146,7 +146,7 @@ export function parseAprsPosition(text: string): GPSPosition | null {
 
 export function parseIcomGps(text: string): { callsign: string; position?: GPSPosition } | null {
   const trimmed = text.trim()
-  const match = trimmed.match(/^\$\$CRC[A-Za-z0-9]{4},([A-Za-z0-9]+)>.+$/)
+  const match = trimmed.match(/^\$\$CRC[A-Za-z0-9]{4},([A-Za-z0-9/-]+)>.+$/)
   if (!match) return null
 
   const callsign = match[1]!
@@ -156,6 +156,40 @@ export function parseIcomGps(text: string): { callsign: string; position?: GPSPo
 
   const position = parseAprsPosition('!' + posMatch[1]!)
   if (!position) return { callsign }
+
+  return { callsign, position }
+}
+
+export function parseRawNmeaGps(text: string): { callsign: string; position?: GPSPosition } | null {
+  const trimmed = text.trim()
+
+  const nmeaMatch = trimmed.match(/^((?:\$GP[^*]+\*[A-Fa-f0-9]{2}\r?\n?\s*)*)/)
+  if (!nmeaMatch) return null
+
+  const gpsBlock = nmeaMatch[1]!.trim()
+  const stationField = trimmed.slice(nmeaMatch[1]!.length).trim()
+
+  if (!stationField || stationField.length < 3) return null
+
+  const parts = stationField.split(',').map((s) => s.trim()).filter(Boolean)
+  if (parts.length === 0) return null
+  const callsign = parts[0]!
+
+  if (callsign.length < 3 || callsign.length > 20) return null
+
+  let position: GPSPosition | undefined
+
+  const ggaMatch = gpsBlock.match(/\$GPGGA[^*]+\*[A-Fa-f0-9]{2}/)
+  if (ggaMatch) {
+    position = parseNmea(ggaMatch[0]) ?? undefined
+  }
+
+  if (!position) {
+    const rmcMatch = gpsBlock.match(/\$GPRMC[^*]+\*[A-Fa-f0-9]{2}/)
+    if (rmcMatch) {
+      position = parseNmea(rmcMatch[0]) ?? undefined
+    }
+  }
 
   return { callsign, position }
 }

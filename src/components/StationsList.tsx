@@ -17,9 +17,10 @@ interface ContextMenu {
 interface StationsListProps {
   chatRef: React.MutableRefObject<ChatEngine | null>
   sessionMgrRef: React.MutableRefObject<SessionManager | null>
+  onShowOnMap?: (callsign: string) => void
 }
 
-export function StationsList({ chatRef, sessionMgrRef }: StationsListProps) {
+export function StationsList({ chatRef, sessionMgrRef, onShowOnMap }: StationsListProps) {
   const stations = useStationStore((s) => s.stations)
   const addPing = usePingStore((s) => s.addPing)
   const portStatuses = usePortStore((s) => s.statuses)
@@ -84,7 +85,7 @@ export function StationsList({ chatRef, sessionMgrRef }: StationsListProps) {
     if (!sessionMgr) return
 
     const connectedPorts = ports.filter((p) => portStatuses[p.name] === 'connected')
-    const data = new TextEncoder().encode('RPCPositionReport\x1Dst\x1F.')
+    const data = new TextEncoder().encode('position?')
 
     for (const port of connectedPorts) {
       const frame: DDT2Frame = {
@@ -114,7 +115,7 @@ export function StationsList({ chatRef, sessionMgrRef }: StationsListProps) {
     requestingPosRef.current = true
 
     const connectedPorts = ports.filter((p) => portStatuses[p.name] === 'connected')
-    const data = new TextEncoder().encode('RPCPositionReport\x1Dst\x1F.')
+    const data = new TextEncoder().encode('position?')
 
     for (const port of connectedPorts) {
       if (!requestingPosRef.current) break
@@ -151,31 +152,44 @@ export function StationsList({ chatRef, sessionMgrRef }: StationsListProps) {
     setCtxMenu(null)
   }, [removeStation])
 
+  const handleClearAll = useCallback(() => {
+    if (window.confirm('Remove all stations from the heard list?')) {
+      const clearStations = useStationStore.getState().clearStations
+      clearStations()
+    }
+  }, [])
+
   return (
     <div className="station-list-compact">
-      <button
-        className="btn-ping-all"
-        onClick={handlePingAll}
-        disabled={pingingAllRef.current}
-      >
-        {pingingAllRef.current ? 'Pinging...' : 'Ping All'}
-      </button>
-      <button
-        className="btn-reqpos-all"
-        onClick={handleRequestAllPositions}
-        disabled={requestingPosRef.current}
-      >
-        {requestingPosRef.current ? 'Requesting...' : 'Request All Pos'}
-      </button>
+      <div className="station-list-toolbar">
+        <button
+          className="btn-ping-all"
+          onClick={handlePingAll}
+          disabled={pingingAllRef.current}
+        >
+          {pingingAllRef.current ? 'Pinging...' : 'Ping All'}
+        </button>
+        <button
+          className="btn-reqpos-all"
+          onClick={handleRequestAllPositions}
+          disabled={requestingPosRef.current}
+        >
+          {requestingPosRef.current ? 'Requesting...' : 'Request All Pos'}
+        </button>
+        <button className="btn-clear-all" onClick={handleClearAll} title="Clear all stations">
+          Clear All
+        </button>
+      </div>
       {stationList.length === 0 ? (
         <p className="empty-state">No stations heard</p>
       ) : (
         stationList.map((s) => (
           <div key={s.callsign} className="station-item" onContextMenu={(e) => handleContextMenu(e, s.callsign)}>
             <span
-              className={`status-dot ${s.status === StationStatus.Online ? 'online' : s.status === StationStatus.Unattended ? 'warning' : 'offline'}`}
+              className={`status-dot ${s.position ? 'gps' : s.status === StationStatus.Online ? 'online' : s.status === StationStatus.Unattended ? 'warning' : 'offline'}`}
+              title={s.position ? 'GPS position available' : ''}
             />
-            <span className="station-call">{s.callsign}</span>
+            <span className="station-call">{s.callsign}{s.position ? <span className="gps-badge"> GPS</span> : null}</span>
             <span className="station-time">{new Date(s.lastHeard).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
           </div>
         ))
@@ -186,6 +200,9 @@ export function StationsList({ chatRef, sessionMgrRef }: StationsListProps) {
           <div className="ctx-menu" style={{ left: ctxMenu.x, top: ctxMenu.y }}>
             <button className="ctx-item" onClick={() => { handlePing(ctxMenu.callsign); setCtxMenu(null) }}>Ping {ctxMenu.callsign}</button>
             <button className="ctx-item" onClick={() => { handleRequestPos(ctxMenu.callsign); setCtxMenu(null) }}>Request Position</button>
+            {stations[ctxMenu.callsign]?.position && (
+              <button className="ctx-item" onClick={() => { onShowOnMap?.(ctxMenu.callsign); setCtxMenu(null) }}>Show on Map</button>
+            )}
             <button className="ctx-item" onClick={() => { handleQrzLookup(ctxMenu.callsign); setCtxMenu(null) }}>Lookup on QRZ</button>
             <button className="ctx-item ctx-danger" onClick={() => handleRemove(ctxMenu.callsign)}>Remove from List</button>
           </div>

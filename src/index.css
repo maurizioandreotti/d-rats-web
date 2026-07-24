@@ -13,8 +13,8 @@
   --error: #dc2626;
   --code-bg: #f4f3ec;
 
-  --sans: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  --mono: ui-monospace, 'Cascadia Code', 'Fira Code', Consolas, monospace;
+  --sans: system-ui, -apple-system, 'Segoe UI', Roboto, 'Noto Sans', sans-serif;
+  --mono: ui-monospace, 'Cascadia Code', 'Fira Code', Consolas, 'DejaVu Sans Mono', monospace;
 
   font: 15px/1.5 var(--sans);
   color-scheme: light dark;

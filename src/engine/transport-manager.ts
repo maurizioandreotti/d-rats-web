@@ -1,10 +1,11 @@
 import { RadioSerial } from './serial'
 import { Transport } from './transport'
 import { RatflectorConnection } from './ratflector'
-import { parseIcomGps } from './gps'
+import { parseIcomGps, parseRawNmeaGps } from './gps'
 import type { DDT2Frame, PortConfig } from '../types'
 import { usePortStore } from '../store/port-store'
 import { useStationStore } from '../store/station-store'
+import { useEventStore } from '../store/event-store'
 
 export type FrameHandler = (frame: DDT2Frame, portName: string) => void
 
@@ -17,8 +18,8 @@ export class TransportManager {
     this.onFrame = handler
   }
 
-  private handleRawGps(text: string, portName: string): void {
-    const parsed = parseIcomGps(text)
+  private handleRawGps(text: string, _portName: string): void {
+    const parsed = parseIcomGps(text) ?? parseRawNmeaGps(text)
     if (!parsed) return
 
     useStationStore.getState().updateStation(parsed.callsign, {
@@ -29,25 +30,20 @@ export class TransportManager {
       useStationStore.getState().setStationPosition(parsed.callsign, parsed.position)
     }
 
-    if (this.onFrame) {
-      const frame: DDT2Frame = {
-        header: {
-          magic: 0x22,
-          seq: 0,
-          sessionId: 1,
-          type: 0,
-          checksum: 0,
-          length: text.length,
-          sourceStation: parsed.callsign,
-          destStation: 'CQCQCQ',
-        },
-        data: new TextEncoder().encode(text),
-      }
-      this.onFrame(frame, portName)
-    }
+    useEventStore.getState().addEvent({
+      time: Date.now(),
+      text: `[GPS] ${text.substring(0, 120)}`,
+      type: 'gps',
+    })
   }
 
   private handleRawText(text: string, portName: string): void {
+    useEventStore.getState().addEvent({
+      time: Date.now(),
+      text: `[RAW] ${text.substring(0, 120)}`,
+      type: 'raw',
+    })
+
     const callMatch = text.match(/([A-Z]{1,2}\d[A-Z]{1,3})(?:-\d{1,2})?/)
     if (!callMatch) return
 

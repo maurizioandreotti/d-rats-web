@@ -35,6 +35,14 @@ export class Transport {
     this.buffer = concat(this.buffer, data)
     this.parseFrames()
 
+    // parseFrames() only consumes *complete* [SOB]...[EOB] frames. If an
+    // [SOB] is still sitting in the buffer waiting on its [EOB] — the rest
+    // of the frame hasn't arrived yet — the buffer is binary frame data in
+    // progress, not text. Matching it against GPS/raw-text patterns would
+    // treat partial frame bytes (and any stray CR they contain) as a
+    // message, corrupting the frame beyond recovery once the rest arrives.
+    if (findSequence(this.buffer, ENCODED_HEADER) !== -1) return
+
     const gpsText = this.matchGps()
     if (gpsText) {
       this.onGpsString?.(gpsText)
@@ -96,9 +104,13 @@ export class Transport {
     return null
   }
 
+  // Requires an actual line terminator (matching matchGps's gpsaRegex
+  // convention) so a partial chunk of a longer line — very common over
+  // USB-serial, which delivers whatever bytes happen to be available per
+  // read — isn't mistaken for a complete message and dispatched early.
   private matchRawText(): string | null {
     const text = new TextDecoder().decode(this.buffer)
-    const lineMatch = text.match(/^([^\r\n]{5,})\r?\n?/)
+    const lineMatch = text.match(/^([^\r\n]{5,})\r\n?/)
     if (!lineMatch) return null
 
     const rawText = lineMatch[1]!

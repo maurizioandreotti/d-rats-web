@@ -4,6 +4,7 @@ import { SessionManager } from '../engine/session-mgr'
 import { ChatEngine } from '../engine/chat'
 import { FileTransferEngine } from '../engine/file'
 import { RPCEngine } from '../engine/rpc'
+import { isValidCallsign } from '../engine/callsign'
 import { TransportManager } from '../engine/transport-manager'
 import { SESSION_CONTROL, SESSION_CHAT, SESSION_RPC } from '../engine/ddt2'
 import { useChatStore } from '../store/chat-store'
@@ -33,6 +34,12 @@ export function useDratsEngine() {
 
   const handleFrame = useCallback(
     async (frame: DDT2Frame, portName: string) => {
+      // A frame whose source station doesn't look like a real callsign is
+      // almost certainly corrupted (e.g. a checksum-mismatched frame that
+      // still decoded "successfully") — don't let it pollute heard-station
+      // tracking or get attributed as a real sender downstream.
+      if (!isValidCallsign(frame.header.sourceStation)) return
+
       const sessionMgr = sessionMgrRef.current
       if (sessionMgr) {
         sessionMgr.heardOnPort(frame.header.sourceStation, portName)

@@ -1,4 +1,5 @@
 import type { GPSPosition } from '../types'
+import { isValidCallsign } from './callsign'
 
 // Checksum mismatches are logged, not fatal — see splitGpsaFrame for why.
 function warnIfNmeaChecksumBad(body: string, checksumHex: string | undefined): void {
@@ -187,7 +188,7 @@ export function parseIcomGps(
   if (!frame) return null
 
   const callsign = frame.stationField.split('>')[0]
-  if (!callsign) return null
+  if (!callsign || !isValidCallsign(callsign)) return null
 
   const position = parseGpsaBody(frame.data) ?? undefined
   // The same $$CRC-wrapped GPS-A framing radios use for position beacons is
@@ -217,7 +218,7 @@ export function parseRawNmeaGps(
   if (parts.length === 0) return null
   const callsign = parts[0]!
 
-  if (callsign.length < 3 || callsign.length > 20) return null
+  if (!isValidCallsign(callsign)) return null
 
   let position: GPSPosition | undefined
 

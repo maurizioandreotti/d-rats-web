@@ -24,4 +24,12 @@ describe('parseIcomGps', () => {
     expect(result?.position).toBeUndefined()
     expect(result?.message).toBeUndefined()
   })
+
+  it('rejects a station field that does not look like a real callsign', () => {
+    // A malformed/truncated frame (e.g. from a corrupted capture) could put
+    // stray non-callsign text before the '>' — this must never surface as a
+    // "heard station".
+    const result = parseIcomGps('$$CRC1234,!>API510,DSTAR*:!4530.00N/00930.00E-hello')
+    expect(result).toBeNull()
+  })
 })

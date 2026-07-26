@@ -5,17 +5,21 @@ import 'leaflet/dist/leaflet.css'
 import { useStationStore } from '../store/station-store'
 import { useConfigStore } from '../store/config-store'
 import { StationStatus } from '../types'
+import { toMaidenhead } from '../engine/gps'
 
 const ownIcon = (callsign: string) => new L.DivIcon({
-  html: `<div style="display:flex;flex-direction:column;align-items:center;"><div style="background:#4a90d9;width:16px;height:16px;border-radius:50%;border:3px solid white;box-shadow:0 1px 4px rgba(0,0,0,0.4);"></div><span style="margin-top:2px;padding:1px 4px;font-size:10px;font-weight:700;color:#fff;background:rgba(0,0,0,0.55);border-radius:3px;white-space:nowrap;line-height:1.3;">${callsign}</span></div>`,
+  html: `<div style="display:flex;flex-direction:column;align-items:center;"><div style="background:var(--accent);width:16px;height:16px;border-radius:50%;border:3px solid white;box-shadow:0 1px 4px rgba(0,0,0,0.4);"></div><span style="margin-top:2px;padding:1px 4px;font-size:10px;font-weight:700;color:#fff;background:rgba(0,0,0,0.55);border-radius:3px;white-space:nowrap;line-height:1.3;">${callsign}</span></div>`,
   iconSize: [28, 44],
   iconAnchor: [14, 32],
   popupAnchor: [0, -32],
   className: '',
 })
 
+// Red for other stations, matching the map legend's existing "station" color
+// (the legend already defined blue/red for own/station — the markers just
+// weren't using them).
 const stationIcon = (callsign: string) => new L.DivIcon({
-  html: `<div style="display:flex;flex-direction:column;align-items:center;"><div style="background:#e8a838;width:14px;height:14px;border-radius:50%;border:2px solid white;box-shadow:0 1px 4px rgba(0,0,0,0.4);"></div><span style="margin-top:2px;padding:1px 4px;font-size:10px;font-weight:600;color:#fff;background:rgba(0,0,0,0.55);border-radius:3px;white-space:nowrap;line-height:1.3;">${callsign}</span></div>`,
+  html: `<div style="display:flex;flex-direction:column;align-items:center;"><div style="background:var(--error);width:14px;height:14px;border-radius:50%;border:2px solid white;box-shadow:0 1px 4px rgba(0,0,0,0.4);"></div><span style="margin-top:2px;padding:1px 4px;font-size:10px;font-weight:600;color:#fff;background:rgba(0,0,0,0.55);border-radius:3px;white-space:nowrap;line-height:1.3;">${callsign}</span></div>`,
   iconSize: [28, 44],
   iconAnchor: [14, 32],
   popupAnchor: [0, -32],
@@ -135,17 +139,25 @@ export function MapPanel() {
                 <br />
                 {myPosition.lat.toFixed(4)}, {myPosition.lon.toFixed(4)}
                 <br />
+                QTH: {toMaidenhead(myPosition.lat, myPosition.lon)}
+                <br />
                 <em>Drag to adjust</em>
               </Popup>
             </Marker>
           )}
 
           {stationList.map((s) => (
-            <Marker key={s.callsign} position={[s.position!.lat, s.position!.lon]} icon={stationIcon(s.callsign)}>
+            <Marker
+              key={s.callsign}
+              position={[s.position!.lat, s.position!.lon]}
+              icon={stationIcon(s.callsign)}
+            >
               <Popup>
                 <strong>{s.callsign}</strong>
                 <br />
                 {s.position!.lat.toFixed(4)}, {s.position!.lon.toFixed(4)}
+                <br />
+                QTH: {toMaidenhead(s.position!.lat, s.position!.lon)}
                 <br />
                 Status: {STATUS_LABEL[s.status] ?? 'Unknown'}
               </Popup>

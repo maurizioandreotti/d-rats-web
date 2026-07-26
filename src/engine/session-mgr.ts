@@ -1,21 +1,53 @@
 import type { DDT2Frame } from '../types'
-
-export interface SessionHandler {
-  sessionId: number
-  type: number
-  destStation: string
-  incoming(frame: DDT2Frame): void
-}
+import { SESSION_CONTROL, SESSION_CHAT, SESSION_RPC } from './ddt2'
+import {
+  CONTROL_TYPE_ACK,
+  CONTROL_TYPE_END,
+  CONTROL_TYPE_NEW_BASE,
+  newSessionControlType,
+  encodeNewSessionRequest,
+  decodeNewSessionRequest,
+  encodeSessionAck,
+  decodeSessionAck,
+  encodeSessionEnd,
+  decodeSessionEnd,
+} from './control'
 
 export type FrameCallback = (frame: DDT2Frame, portName?: string) => Promise<void>
+export type IncomingSessionCallback = (
+  localId: number,
+  sessionType: number,
+  sourceStation: string,
+  name: string,
+) => void
+
+interface SessionRecord {
+  localId: number
+  remoteId: number | null
+  destStation: string
+  sessionType: number
+  name: string
+  state: 'sync' | 'open' | 'closed'
+}
+
+const NEW_SESSION_RETRIES = 5
+const NEW_SESSION_RETRY_MS = 3000
+const END_SESSION_RETRIES = 3
+const END_SESSION_RETRY_MS = 3000
 
 export class SessionManager {
-  private sessions = new Map<number, SessionHandler>()
+  private sessions = new Map<number, SessionRecord>()
   private outgoingCallback: FrameCallback | null = null
   private station = 'CQCQCQ'
   private heardStations = new Map<string, number>()
   private stationPorts = new Map<string, string>()
-  private nextSessionId = 2
+  // 0=control, 1=chat, 2=rpc are fixed slots; dynamically negotiated
+  // sessions (e.g. file transfer) start allocating from 3.
+  private nextSessionId = 3
+
+  private pendingAcks = new Map<number, (peerId: number) => void>()
+  private pendingEnds = new Map<number, () => void>()
+  private onIncomingSession: IncomingSessionCallback | null = null
 
   setOutgoingCallback(cb: FrameCallback): void {
     this.outgoingCallback = cb
@@ -29,12 +61,11 @@ export class SessionManager {
     return this.station
   }
 
-  registerSession(handler: SessionHandler): void {
-    this.sessions.set(handler.sessionId, handler)
-  }
-
-  unregisterSession(sessionId: number): void {
-    this.sessions.delete(sessionId)
+  // Called when a peer opens a new stateful session against us (e.g. an
+  // incoming file-transfer offer). The session is already registered and
+  // acked by the time this fires.
+  setOnIncomingSession(cb: IncomingSessionCallback): void {
+    this.onIncomingSession = cb
   }
 
   heardOnPort(callsign: string, portName: string): void {
@@ -50,14 +81,105 @@ export class SessionManager {
 
     this.heardStations.set(sourceStation, Date.now())
 
-    if (sessionId === 0) {
+    if (sessionId === SESSION_CONTROL) {
+      this.handleControlFrame(frame)
+    }
+  }
+
+  private handleControlFrame(frame: DDT2Frame): void {
+    const { type, sourceStation, destStation } = frame.header
+    if (destStation !== this.station) return
+
+    if (type === CONTROL_TYPE_ACK) {
+      const parsed = decodeSessionAck(frame.data)
+      if (!parsed) return
+
+      const record = this.sessions.get(parsed.requesterId)
+      if (!record) return
+
+      record.remoteId = parsed.peerId
+      if (record.state === 'sync') record.state = 'open'
+
+      const resolve = this.pendingAcks.get(parsed.requesterId)
+      if (resolve) {
+        resolve(parsed.peerId)
+        this.pendingAcks.delete(parsed.requesterId)
+      }
       return
     }
 
-    const session = this.sessions.get(sessionId)
-    if (session) {
-      session.incoming(frame)
+    if (type === CONTROL_TYPE_END) {
+      const localId = decodeSessionEnd(frame.data)
+      if (localId === null) return
+
+      const record = this.sessions.get(localId)
+      // Already closed on our side: this is the peer's echo of our own echo
+      // (or a stray duplicate). Drop it silently instead of echoing forever.
+      if (!record) return
+
+      const replyId = record.remoteId ?? localId
+      record.state = 'closed'
+      this.sessions.delete(localId)
+
+      // Echo the end-of-session message back, same as a real D-RATS peer,
+      // so whichever side initiated the close can stop waiting.
+      void this.sendControlFrame(sourceStation, CONTROL_TYPE_END, encodeSessionEnd(replyId))
+
+      const resolve = this.pendingEnds.get(localId)
+      if (resolve) {
+        resolve()
+        this.pendingEnds.delete(localId)
+      }
+      return
     }
+
+    if (type >= CONTROL_TYPE_NEW_BASE) {
+      const parsed = decodeNewSessionRequest(frame.data)
+      if (!parsed) return
+      const sessionType = type - CONTROL_TYPE_NEW_BASE
+
+      const existing = [...this.sessions.values()].find(
+        (s) => s.remoteId === parsed.localId && s.destStation === sourceStation,
+      )
+      if (existing) {
+        void this.sendControlFrame(
+          sourceStation,
+          CONTROL_TYPE_ACK,
+          encodeSessionAck(parsed.localId, existing.localId),
+        )
+        return
+      }
+
+      const localId = this.generateSessionId()
+      this.sessions.set(localId, {
+        localId,
+        remoteId: parsed.localId,
+        destStation: sourceStation,
+        sessionType,
+        name: parsed.name,
+        state: 'open',
+      })
+
+      void this.sendControlFrame(sourceStation, CONTROL_TYPE_ACK, encodeSessionAck(parsed.localId, localId))
+      this.onIncomingSession?.(localId, sessionType, sourceStation, parsed.name)
+    }
+  }
+
+  private async sendControlFrame(dest: string, type: number, data: Uint8Array): Promise<void> {
+    const frame: DDT2Frame = {
+      header: {
+        magic: 0xdd,
+        seq: 0,
+        sessionId: SESSION_CONTROL,
+        type,
+        checksum: 0,
+        length: data.length,
+        sourceStation: this.station,
+        destStation: dest,
+      },
+      data,
+    }
+    await this.outgoing(frame)
   }
 
   async outgoing(frame: DDT2Frame, portName?: string): Promise<void> {
@@ -68,16 +190,85 @@ export class SessionManager {
       frame.header.destStation = 'CQCQCQ'
     }
 
+    // Sessions negotiated over the control channel are addressed on the wire
+    // using the *peer's* chosen id for the session, not our own local id.
+    if (
+      frame.header.sessionId !== SESSION_CONTROL &&
+      frame.header.sessionId !== SESSION_CHAT &&
+      frame.header.sessionId !== SESSION_RPC
+    ) {
+      const record = this.sessions.get(frame.header.sessionId)
+      if (record?.remoteId != null) {
+        frame.header.sessionId = record.remoteId
+      }
+    }
+
     await this.outgoingCallback(frame, portName)
   }
 
-  async startSession(_sessionType: number, _destStation: string): Promise<number> {
-    const sessionId = this.nextSessionId++
-    return sessionId
+  // Negotiates a new stateful session with `destStation` over the control
+  // channel, retrying the request until acked. Resolves to the local session
+  // id (use this to key all further engine-level bookkeeping); outgoing()
+  // takes care of translating it to the peer's id on the wire.
+  async startSession(sessionType: number, destStation: string, name = ''): Promise<number> {
+    const localId = this.generateSessionId()
+    this.sessions.set(localId, {
+      localId,
+      remoteId: null,
+      destStation,
+      sessionType,
+      name,
+      state: 'sync',
+    })
+
+    for (let attempt = 0; attempt < NEW_SESSION_RETRIES; attempt++) {
+      const peerId = await new Promise<number | null>((resolve) => {
+        this.pendingAcks.set(localId, resolve)
+        void this.sendControlFrame(
+          destStation,
+          newSessionControlType(sessionType),
+          encodeNewSessionRequest(localId, name),
+        )
+        setTimeout(() => {
+          if (this.pendingAcks.has(localId)) {
+            this.pendingAcks.delete(localId)
+            resolve(null)
+          }
+        }, NEW_SESSION_RETRY_MS)
+      })
+
+      if (peerId !== null) return localId
+    }
+
+    this.sessions.delete(localId)
+    throw new Error(`No response establishing session with ${destStation}`)
   }
 
-  async endSession(sessionId: number): Promise<void> {
-    this.sessions.delete(sessionId)
+  async endSession(localId: number): Promise<void> {
+    const record = this.sessions.get(localId)
+    if (!record) return
+
+    const targetId = record.remoteId ?? localId
+
+    for (let attempt = 0; attempt < END_SESSION_RETRIES; attempt++) {
+      const closed = await new Promise<boolean>((resolve) => {
+        this.pendingEnds.set(localId, () => resolve(true))
+        void this.sendControlFrame(record.destStation, CONTROL_TYPE_END, encodeSessionEnd(targetId))
+        setTimeout(() => {
+          if (this.pendingEnds.has(localId)) {
+            this.pendingEnds.delete(localId)
+            resolve(false)
+          }
+        }, END_SESSION_RETRY_MS)
+      })
+      if (closed) break
+    }
+
+    this.sessions.delete(localId)
+  }
+
+  getSessionDest(localId: number): string | undefined {
+    return this.sessions.get(localId)?.destStation
   }
 
   getHeardStations(): Map<string, number> {
@@ -89,6 +280,12 @@ export class SessionManager {
   }
 
   generateSessionId(): number {
+    if (this.nextSessionId > 254) {
+      for (let id = 3; id <= 254; id++) {
+        if (!this.sessions.has(id)) return id
+      }
+      throw new Error('No free session IDs available')
+    }
     return this.nextSessionId++
   }
 }

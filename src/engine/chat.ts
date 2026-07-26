@@ -70,7 +70,7 @@ export class ChatEngine {
 
       case CHAT_TYPE_PING_REQ: {
         this.onPing?.(sourceStation, destStation, 'request', 'Ping Request')
-        const isForUs = destStation === myCall || destStation === 'CQCQCQ' || !destStation
+        const isForUs = destStation === myCall || destStation === 'CQCQCQ'
         if (!isForUs) break
 
         if (destStation === 'CQCQCQ') {
@@ -92,7 +92,7 @@ export class ChatEngine {
 
       case CHAT_TYPE_PING_ERQ: {
         this.onPing?.(sourceStation, destStation, 'echo_request', `Echo request of ${text.length} bytes`)
-        const isForUs = destStation === myCall || destStation === 'CQCQCQ' || !destStation
+        const isForUs = destStation === myCall || destStation === 'CQCQCQ'
         if (!isForUs) break
 
         if (destStation === 'CQCQCQ') {

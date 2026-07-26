@@ -145,7 +145,7 @@ export function SerialConnect({ onConnect, onDisconnect }: SerialConnectProps) {
         {config.ports.map((port, i) => {
           const status = portStatuses[port.name] ?? 'disconnected'
           const msg = portMessages[port.name] ?? ''
-          const isConnecting = connecting === port.name
+          const isConnecting = connecting === port.name || status === 'connecting'
           const isConnected = status === 'connected'
 
           return (

@@ -18,7 +18,7 @@ export {
   SESSION_CONTROL,
   SESSION_CHAT,
 } from './ddt2'
-export { parseGps, parseNmea, parseAprs, distance, bearingTo } from './gps'
+export { parseGps, parseNmea, parseAprs, distance, bearingTo, toMaidenhead } from './gps'
 export { XON, XOFF } from './serial'
 export {
   CHAT_TYPE_DEF,
@@ -34,6 +34,13 @@ export {
   FILE_MAX_RETRIES,
   FILE_MIN_TIMEOUT_MS,
 } from './file'
+export {
+  SESSION_TYPE_GENERAL,
+  SESSION_TYPE_SOCKET,
+  SESSION_TYPE_FILEXFER,
+  SESSION_TYPE_FORMXFER,
+  SESSION_TYPE_RPC,
+} from './control'
 export { RatflectorConnection } from './ratflector'
 export type { RatflectorStatus } from './ratflector'
 export { TransportManager } from './transport-manager'

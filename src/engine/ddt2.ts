@@ -11,6 +11,9 @@ export const HEADER_SIZE = 25
 
 export const SESSION_CONTROL = 0
 export const SESSION_CHAT = 1
+// Fixed by registration-order convention (control, chat, rpc), matching
+// reference D-RATS peers — never negotiated over the control channel.
+export const SESSION_RPC = 2
 
 function padCallsign(call: string): Uint8Array {
   const encoder = new TextEncoder()
@@ -19,7 +22,7 @@ function padCallsign(call: string): Uint8Array {
 }
 
 function trimCallsign(bytes: Uint8Array<ArrayBuffer>): string {
-  const cleaned = bytes.filter((b) => b !== 0x00 && b !== 0x20 && b !== 0x7e)
+  const cleaned = bytes.filter((b) => b !== 0x7e)
   const decoder = new TextDecoder()
   return decoder.decode(cleaned)
 }

@@ -22,6 +22,8 @@ export interface GPSPosition {
   direction?: number
   timestamp?: number
   source?: string
+  symbolTableId?: string
+  symbolCode?: string
 }
 
 export interface ChatMessage {
@@ -62,12 +64,27 @@ export type SessionType = (typeof SessionType)[keyof typeof SessionType]
 
 export interface FileTransferItem {
   id: string
+  sessionId: number
   filename: string
   size: number
   transferred: number
   direction: 'send' | 'receive'
   state: 'offer' | 'transferring' | 'complete' | 'error'
   station: string
+}
+
+// A file the user has offered up for other stations to discover via RPC
+// file-list and retrieve via RPC pull-file (see engine/rpc.ts).
+export interface SharedFile {
+  name: string
+  size: number
+  data: Uint8Array
+  addedAt: number
+}
+
+export interface RemoteFileEntry {
+  name: string
+  info: string
 }
 
 export interface SerialConfig {

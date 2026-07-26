@@ -279,12 +279,22 @@ export class RadioSerial {
             }
           }
 
-          for (const cb of RadioSerial.onSniffCallbacks) cb('rx', value)
+          for (const cb of RadioSerial.onSniffCallbacks) {
+            try {
+              cb('rx', value)
+            } catch (err) {
+              console.error('[RadioSerial] Sniff callback threw, continuing read loop:', err)
+            }
+          }
 
           if (filtered.length > 0) {
             const filteredArr = new Uint8Array(filtered)
             for (const cb of this.onDataCallbacks) {
-              cb(filteredArr)
+              try {
+                cb(filteredArr)
+              } catch (err) {
+                console.error('[RadioSerial] Data callback threw, continuing read loop:', err)
+              }
             }
           }
         } catch (err) {

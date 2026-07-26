@@ -2,6 +2,7 @@ import { useConfigStore } from '../store/config-store'
 import { useState, useRef, useCallback } from 'react'
 import { MapContainer, TileLayer, useMapEvents } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
+import { toMaidenhead } from '../engine/gps'
 
 function PickerMap({ onPick }: { onPick: (lat: number, lon: number) => void }) {
   useMapEvents({
@@ -179,6 +180,12 @@ export function ConfigPanel() {
             onChange={(e) => setLon(Number(e.target.value))}
           />
         </div>
+        {myPos && (
+          <div className="form-row">
+            <label>QTH Locator</label>
+            <span>{toMaidenhead(myPos.lat, myPos.lon)}</span>
+          </div>
+        )}
         <button className="btn btn-secondary" onClick={() => setShowPicker(true)}>
           Pick on Map
         </button>

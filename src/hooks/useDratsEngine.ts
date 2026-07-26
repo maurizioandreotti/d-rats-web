@@ -3,14 +3,17 @@ import type { PortConfig } from '../types'
 import { SessionManager } from '../engine/session-mgr'
 import { ChatEngine } from '../engine/chat'
 import { FileTransferEngine } from '../engine/file'
+import { RPCEngine } from '../engine/rpc'
 import { TransportManager } from '../engine/transport-manager'
-import { SESSION_CONTROL, SESSION_CHAT } from '../engine/ddt2'
+import { SESSION_CONTROL, SESSION_CHAT, SESSION_RPC } from '../engine/ddt2'
 import { useChatStore } from '../store/chat-store'
 import { usePingStore } from '../store/ping-store'
 import { useStationStore } from '../store/station-store'
 import { useFileStore } from '../store/file-store'
+import { useSharedFilesStore } from '../store/shared-files-store'
 import { useConfigStore } from '../store/config-store'
 import { useEventStore } from '../store/event-store'
+import { formatFileSize } from '../utils/format'
 import type { DDT2Frame } from '../types'
 import { StationStatus } from '../types'
 
@@ -19,6 +22,7 @@ export function useDratsEngine() {
   const sessionMgrRef = useRef<SessionManager | null>(null)
   const chatRef = useRef<ChatEngine | null>(null)
   const fileRef = useRef<FileTransferEngine | null>(null)
+  const rpcRef = useRef<RPCEngine | null>(null)
   const initializedRef = useRef(false)
 
   const addChatMessage = useChatStore((s) => s.addMessage)
@@ -52,6 +56,8 @@ export function useDratsEngine() {
 
       if (sessionId === SESSION_CHAT) {
         await chatRef.current?.handleIncoming(frame)
+      } else if (sessionId === SESSION_RPC) {
+        await rpcRef.current?.handleIncoming(frame)
       } else {
         await fileRef.current?.handleIncoming(frame)
       }
@@ -97,18 +103,35 @@ export function useDratsEngine() {
     chatRef.current = chat
 
     const fileTransfer = new FileTransferEngine(sessionMgr)
-    fileTransfer.setOnOffer((filename, size, sessionId) => {
+    fileTransfer.setOnOffer((filename, size, sessionId, fromStation) => {
       const id = crypto.randomUUID()
-      addTransfer({ id, filename, size, transferred: 0, direction: 'receive', state: 'offer', station: String(sessionId) })
+      addTransfer({ id, sessionId, filename, size, transferred: 0, direction: 'receive', state: 'offer', station: fromStation })
+      useEventStore.getState().addEvent({
+        time: Date.now(),
+        text: `[File] Offer from ${fromStation}: ${filename} (${size} bytes)`,
+        type: 'frame',
+      })
     })
-    fileTransfer.setOnProgress((filename, transferred, total) => {
+    fileTransfer.setOnProgress((_filename, transferred, total, sessionId) => {
       const store = useFileStore.getState()
-      const existing = store.transfers.find((t) => t.filename === filename)
+      const existing = store.transfers.find((t) => t.sessionId === sessionId)
       if (existing) {
         updateTransfer(existing.id, { transferred, state: transferred >= total ? 'complete' : 'transferring' })
       }
     })
     fileRef.current = fileTransfer
+
+    const rpc = new RPCEngine(sessionMgr)
+    rpc.setFileTransferEngine(fileTransfer)
+    rpc.setFileProvider({
+      list: () =>
+        useSharedFilesStore.getState().files.map((f) => ({
+          name: f.name,
+          info: `${formatFileSize(f.size)} (${new Date(f.addedAt).toLocaleString()})`,
+        })),
+      get: (name) => useSharedFilesStore.getState().files.find((f) => f.name === name)?.data ?? null,
+    })
+    rpcRef.current = rpc
 
     transportMgr.setOnFrame(handleFrame)
 
@@ -167,6 +190,7 @@ export function useDratsEngine() {
     sessionMgrRef,
     chatRef,
     fileRef,
+    rpcRef,
     connectPort,
     disconnectPort,
   } as const

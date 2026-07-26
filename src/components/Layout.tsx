@@ -35,6 +35,8 @@ export function Layout() {
   const [activeTab, setActiveTab] = useState('radio')
   const {
     chatRef,
+    fileRef,
+    rpcRef,
     sessionMgrRef,
     connectPort,
     disconnectPort,
@@ -81,7 +83,7 @@ export function Layout() {
       case 'map':
         return <MapPanel />
       case 'files':
-        return <FileTransfer />
+        return <FileTransfer fileRef={fileRef} rpcRef={rpcRef} />
       case 'events':
         return <EventLog />
       case 'wiki':

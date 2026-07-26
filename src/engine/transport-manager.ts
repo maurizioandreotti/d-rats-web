@@ -2,6 +2,7 @@ import { RadioSerial } from './serial'
 import { Transport } from './transport'
 import { RatflectorConnection } from './ratflector'
 import { parseIcomGps, parseRawNmeaGps } from './gps'
+import { SESSION_CHAT } from './ddt2'
 import type { DDT2Frame, PortConfig } from '../types'
 import { usePortStore } from '../store/port-store'
 import { useStationStore } from '../store/station-store'
@@ -18,7 +19,7 @@ export class TransportManager {
     this.onFrame = handler
   }
 
-  private handleRawGps(text: string, _portName: string): void {
+  private handleRawGps(text: string, portName: string): void {
     const parsed = parseIcomGps(text) ?? parseRawNmeaGps(text)
     if (!parsed) return
 
@@ -30,11 +31,37 @@ export class TransportManager {
       useStationStore.getState().setStationPosition(parsed.callsign, parsed.position)
     }
 
+    // The GPS-A wrapper radios use for position beacons is also used to
+    // carry plain text messages — when there's no position, what's left is
+    // a chat message, not telemetry, so route it into the chat pipeline
+    // instead of only logging it as a GPS event no one ever sees again.
+    if (parsed.message) {
+      this.forwardChatText(parsed.callsign, parsed.message, portName)
+      return
+    }
+
     useEventStore.getState().addEvent({
       time: Date.now(),
       text: `[GPS] ${text.substring(0, 120)}`,
       type: 'gps',
     })
+  }
+
+  private forwardChatText(callsign: string, text: string, portName: string): void {
+    const frame: DDT2Frame = {
+      header: {
+        magic: 0x22,
+        seq: 0,
+        sessionId: SESSION_CHAT,
+        type: 0,
+        checksum: 0,
+        length: text.length,
+        sourceStation: callsign,
+        destStation: 'CQCQCQ',
+      },
+      data: new TextEncoder().encode(text),
+    }
+    this.onFrame?.(frame, portName)
   }
 
   private handleRawText(text: string, portName: string): void {
@@ -44,10 +71,10 @@ export class TransportManager {
       type: 'raw',
     })
 
-    const callMatch = text.match(/([A-Z]{1,2}\d[A-Z]{1,3})(?:-\d{1,2})?/)
+    const callMatch = text.match(/([A-Za-z]{1,2}\d[A-Za-z]{1,3})([-/][A-Za-z0-9]{1,3})?/)
     if (!callMatch) return
 
-    const callsign = callMatch[1]!
+    const callsign = (callMatch[1]! + (callMatch[2] ?? '')).toUpperCase()
     useStationStore.getState().updateStation(callsign, {
       lastHeard: Date.now(),
     })
@@ -85,6 +112,9 @@ export class TransportManager {
   }
 
   async connectSerial(name: string, config: PortConfig): Promise<void> {
+    const status = usePortStore.getState().statuses[name]
+    if (status === 'connecting' || status === 'connected') return
+
     const setStatus = usePortStore.getState().setStatus
     setStatus(name, 'connecting', `Opening ${name}...`)
 
@@ -132,6 +162,9 @@ export class TransportManager {
   }
 
   async connectRatflector(name: string, config: PortConfig): Promise<void> {
+    const status = usePortStore.getState().statuses[name]
+    if (status === 'connecting' || status === 'connected') return
+
     const setStatus = usePortStore.getState().setStatus
     const rf = config.ratflector
     if (!rf) throw new Error('Missing ratflector config')

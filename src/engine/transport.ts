@@ -8,6 +8,7 @@ export class Transport {
   private onFrame: ((frame: DDT2Frame) => void) | null = null
   private onGpsString: ((text: string) => void) | null = null
   private onRawText: ((text: string) => void) | null = null
+  private onDecodeError: ((rawFrame: Uint8Array) => void) | null = null
 
   constructor(serial: RadioSerial) {
     this.serial = serial
@@ -16,6 +17,15 @@ export class Transport {
 
   setOnFrame(cb: (frame: DDT2Frame) => void): void {
     this.onFrame = cb
+  }
+
+  // Fires when a complete [SOB]...[EOB] span was found but decodeFrame()
+  // couldn't make sense of it (CRC/yEnc/zlib mismatch). Without this, a
+  // failed decode was previously visible only in the browser console — a
+  // file transfer or chat message that never arrives looked identical to
+  // one that was silently dropped here.
+  setOnDecodeError(cb: (rawFrame: Uint8Array) => void): void {
+    this.onDecodeError = cb
   }
 
   setOnGpsString(cb: (text: string) => void): void {
@@ -77,6 +87,7 @@ export class Transport {
           this.onFrame?.(frame)
         } else {
           console.warn('[Transport] decodeFrame returned null — CRC, yEnc, or zlib mismatch')
+          this.onDecodeError?.(frameData)
         }
       })
     }

@@ -16,15 +16,17 @@ const GROUP_SEPARATOR = '\x1d'
 
 export const JOB_FILE_LIST = 'RPCFileListJob'
 export const JOB_PULL_FILE = 'RPCPullFileJob'
+export const JOB_DELETE_FILE = 'RPCDeleteFileJob'
 
 const RPC_TIMEOUT_MS = 30000
 
-// Serves the responder side of file-list/pull requests. The browser has no
-// arbitrary filesystem to expose, so this is backed by whatever the app
-// chooses to call "shared" (see shared-files-store.ts), not a real directory.
+// Serves the responder side of file-list/pull/delete requests, backed by
+// the real folder the user picked for the Local pane (local-files.ts) —
+// reads are async since File System Access API access always is.
 export interface FileProvider {
-  list(): RemoteFileEntry[]
-  get(name: string): Uint8Array | null
+  list(): Promise<RemoteFileEntry[]>
+  get(name: string): Promise<Uint8Array | null>
+  remove(name: string): Promise<boolean>
 }
 
 export function encodeDict(fields: Record<string, string>): string {
@@ -55,6 +57,8 @@ export class RPCEngine {
   private sessionManager: SessionManager
   private fileTransfer: FileTransferEngine | null = null
   private fileProvider: FileProvider | null = null
+  private pullGate: (() => boolean) | null = null
+  private deletePassword: (() => string) | null = null
   private pendingCalls = new Map<number, PendingCall>()
   private nextIdent = 0
 
@@ -71,6 +75,18 @@ export class RPCEngine {
 
   setFileProvider(provider: FileProvider): void {
     this.fileProvider = provider
+  }
+
+  // Matches D-RATS's prefs.allow_remote_files checkbox — gates pulls only,
+  // not listing (rpc_file_list has no such gate in the reference either).
+  setPullGate(gate: () => boolean): void {
+    this.pullGate = gate
+  }
+
+  // Matches D-RATS's remote_admin_passwd — an empty configured password
+  // means remote delete is always rejected, regardless of what's sent.
+  setDeletePassword(getPassword: () => string): void {
+    this.deletePassword = getPassword
   }
 
   async handleIncoming(frame: DDT2Frame): Promise<void> {
@@ -92,29 +108,30 @@ export class RPCEngine {
 
       const jobType = text.slice(0, groupIdx)
       const args = decodeDict(text.slice(groupIdx + 1))
-      const result = this.handleJob(jobType, args, sourceStation)
+      const result = await this.handleJob(jobType, args, sourceStation)
       if (!result) return
 
       await this.sendRaw(sourceStation, RPC_TYPE_ACK, seq, encodeDict(result))
     }
   }
 
-  private handleJob(
+  private async handleJob(
     jobType: string,
     args: Record<string, string>,
     requester: string,
-  ): Record<string, string> | null {
+  ): Promise<Record<string, string> | null> {
     if (jobType === JOB_FILE_LIST) {
       const result: Record<string, string> = {}
-      for (const file of this.fileProvider?.list() ?? []) result[file.name] = file.info
+      for (const file of (await this.fileProvider?.list()) ?? []) result[file.name] = file.info
       return result
     }
 
     if (jobType === JOB_PULL_FILE) {
       const filename = args.fn
       if (!filename) return { rc: 'Missing filename' }
+      if (this.pullGate && !this.pullGate()) return { rc: 'Remote file transfers not enabled' }
 
-      const data = this.fileProvider?.get(filename) ?? null
+      const data = (await this.fileProvider?.get(filename)) ?? null
       if (!data) return { rc: 'File not found' }
       if (!this.fileTransfer) return { rc: 'Remote file transfers not enabled' }
 
@@ -124,16 +141,38 @@ export class RPCEngine {
       return { rc: 'OK' }
     }
 
+    if (jobType === JOB_DELETE_FILE) {
+      const filename = args.fn
+      if (!filename) return { rc: 'Missing filename' }
+
+      const configured = this.deletePassword?.() ?? ''
+      if (!configured || args.passwd !== configured) return { rc: 'Incorrect password' }
+
+      const removed = (await this.fileProvider?.remove(filename)) ?? false
+      return removed ? { rc: 'OK' } : { rc: 'File not found' }
+    }
+
     return null
   }
 
-  async listFiles(dest: string): Promise<RemoteFileEntry[]> {
-    const result = await this.submit(JOB_FILE_LIST, {}, dest)
+  async listFiles(dest: string, portName?: string): Promise<RemoteFileEntry[]> {
+    const result = await this.submit(JOB_FILE_LIST, {}, dest, portName)
     return Object.entries(result).map(([name, info]) => ({ name, info }))
   }
 
-  async pullFile(dest: string, filename: string): Promise<{ ok: boolean; message: string }> {
-    const result = await this.submit(JOB_PULL_FILE, { fn: filename }, dest)
+  async pullFile(dest: string, filename: string, portName?: string): Promise<{ ok: boolean; message: string }> {
+    const result = await this.submit(JOB_PULL_FILE, { fn: filename }, dest, portName)
+    const rc = result.rc ?? 'No response'
+    return { ok: rc === 'OK', message: rc }
+  }
+
+  async deleteFile(
+    dest: string,
+    filename: string,
+    password: string,
+    portName?: string,
+  ): Promise<{ ok: boolean; message: string }> {
+    const result = await this.submit(JOB_DELETE_FILE, { fn: filename, passwd: password }, dest, portName)
     const rc = result.rc ?? 'No response'
     return { ok: rc === 'OK', message: rc }
   }
@@ -142,6 +181,7 @@ export class RPCEngine {
     jobType: string,
     args: Record<string, string>,
     dest: string,
+    portName?: string,
   ): Promise<Record<string, string>> {
     const ident = this.nextIdent
     this.nextIdent = (this.nextIdent + 1) % 65536
@@ -154,11 +194,17 @@ export class RPCEngine {
       }, RPC_TIMEOUT_MS)
 
       this.pendingCalls.set(ident, { resolve, reject, timeout })
-      void this.sendRaw(dest, RPC_TYPE_REQUEST, ident, payload)
+      void this.sendRaw(dest, RPC_TYPE_REQUEST, ident, payload, portName)
     })
   }
 
-  private async sendRaw(dest: string, type: number, seq: number, payload: string): Promise<void> {
+  private async sendRaw(
+    dest: string,
+    type: number,
+    seq: number,
+    payload: string,
+    portName?: string,
+  ): Promise<void> {
     const data = new TextEncoder().encode(payload)
     const frame: DDT2Frame = {
       header: {
@@ -173,6 +219,6 @@ export class RPCEngine {
       },
       data,
     }
-    await this.sessionManager.outgoing(frame)
+    await this.sessionManager.outgoing(frame, portName)
   }
 }

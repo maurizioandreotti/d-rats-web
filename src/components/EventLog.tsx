@@ -9,7 +9,7 @@ export function EventLog() {
 
   for (const t of transfers) {
     all.push({
-      time: Date.now(),
+      time: t.timestamp,
       text: `[File] ${t.direction === 'receive' ? '↓' : '↑'} ${t.filename} - ${t.state}`,
       type: 'file',
     })

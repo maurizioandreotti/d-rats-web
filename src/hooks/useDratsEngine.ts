@@ -5,13 +5,15 @@ import { ChatEngine } from '../engine/chat'
 import { FileTransferEngine } from '../engine/file'
 import { RPCEngine } from '../engine/rpc'
 import { isValidCallsign } from '../engine/callsign'
+import { parseGps } from '../engine/gps'
 import { TransportManager } from '../engine/transport-manager'
-import { SESSION_CONTROL, SESSION_CHAT, SESSION_RPC } from '../engine/ddt2'
+import { SESSION_CONTROL, SESSION_CHAT, SESSION_RPC, SESSION_POSITION } from '../engine/ddt2'
 import { useChatStore } from '../store/chat-store'
 import { usePingStore } from '../store/ping-store'
 import { useStationStore } from '../store/station-store'
 import { useFileStore } from '../store/file-store'
-import { useSharedFilesStore } from '../store/shared-files-store'
+import { useLocalFilesStore } from '../store/local-files-store'
+import { readFolderFile } from '../engine/local-files'
 import { useConfigStore } from '../store/config-store'
 import { useEventStore } from '../store/event-store'
 import { formatFileSize } from '../utils/format'
@@ -57,7 +59,7 @@ export function useDratsEngine() {
 
       useEventStore.getState().addEvent({
         time: Date.now(),
-        text: `[Frame] ${direction === 'incoming' ? '←' : '→'} session=${sessionId} ${frame.header.sourceStation} → ${frame.header.destStation}`,
+        text: `[Frame] ${direction === 'incoming' ? '←' : '→'} session=${sessionId} type=${frame.header.type} seq=${frame.header.seq} ${frame.header.sourceStation} → ${frame.header.destStation}`,
         type: 'frame',
       })
 
@@ -65,6 +67,27 @@ export function useDratsEngine() {
         await chatRef.current?.handleIncoming(frame)
       } else if (sessionId === SESSION_RPC) {
         await rpcRef.current?.handleIncoming(frame)
+      } else if (sessionId === SESSION_POSITION) {
+        const text = new TextDecoder().decode(frame.data)
+        if (text === 'position?') {
+          usePingStore.getState().addPing({
+            from: frame.header.sourceStation,
+            to: frame.header.destStation,
+            type: 'position_request',
+            data: text,
+            timestamp: Date.now(),
+          })
+        } else {
+          const fix = parseGps(text)
+          if (fix) setStationPosition(frame.header.sourceStation, fix)
+          usePingStore.getState().addPing({
+            from: frame.header.sourceStation,
+            to: frame.header.destStation,
+            type: 'position_response',
+            data: fix ? `${fix.lat.toFixed(5)}, ${fix.lon.toFixed(5)}` : text,
+            timestamp: Date.now(),
+          })
+        }
       } else {
         await fileRef.current?.handleIncoming(frame)
       }
@@ -80,6 +103,21 @@ export function useDratsEngine() {
 
     const sessionMgr = new SessionManager()
     sessionMgr.setStation(config.myCallsign || 'N0CALL')
+    sessionMgr.setOnOutgoing((frame) => {
+      if (frame.header.sessionId === SESSION_CONTROL) return
+      useEventStore.getState().addEvent({
+        time: Date.now(),
+        text: `[Frame] → session=${frame.header.sessionId} type=${frame.header.type} seq=${frame.header.seq} ${frame.header.sourceStation} → ${frame.header.destStation}`,
+        type: 'frame',
+      })
+    })
+    sessionMgr.setOnMissingRemoteId((localId, hasRecord) => {
+      useEventStore.getState().addEvent({
+        time: Date.now(),
+        text: `[Session] Sending on local session ${localId} with no confirmed peer id yet (record ${hasRecord ? 'exists' : 'missing'}) — frame carries our own unrewritten id`,
+        type: 'frame',
+      })
+    })
     sessionMgrRef.current = sessionMgr
 
     const chat = new ChatEngine(sessionMgr)
@@ -112,7 +150,7 @@ export function useDratsEngine() {
     const fileTransfer = new FileTransferEngine(sessionMgr)
     fileTransfer.setOnOffer((filename, size, sessionId, fromStation) => {
       const id = crypto.randomUUID()
-      addTransfer({ id, sessionId, filename, size, transferred: 0, direction: 'receive', state: 'offer', station: fromStation })
+      addTransfer({ id, sessionId, filename, size, transferred: 0, direction: 'receive', state: 'offer', station: fromStation, timestamp: Date.now() })
       useEventStore.getState().addEvent({
         time: Date.now(),
         text: `[File] Offer from ${fromStation}: ${filename} (${size} bytes)`,
@@ -123,20 +161,34 @@ export function useDratsEngine() {
       const store = useFileStore.getState()
       const existing = store.transfers.find((t) => t.sessionId === sessionId)
       if (existing) {
-        updateTransfer(existing.id, { transferred, state: transferred >= total ? 'complete' : 'transferring' })
+        updateTransfer(existing.id, { transferred, state: transferred >= total ? 'complete' : 'transferring', timestamp: Date.now() })
       }
+    })
+    fileTransfer.setOnDrop((sessionId, fromStation, frameType) => {
+      useEventStore.getState().addEvent({
+        time: Date.now(),
+        text: `[File] Dropped a type=${frameType} frame for session ${sessionId} from ${fromStation} — no active transfer registered under that id`,
+        type: 'frame',
+      })
     })
     fileRef.current = fileTransfer
 
     const rpc = new RPCEngine(sessionMgr)
     rpc.setFileTransferEngine(fileTransfer)
+    rpc.setPullGate(() => useConfigStore.getState().config.allowRemoteFileTransfers)
+    rpc.setDeletePassword(() => useConfigStore.getState().config.remoteDeletePassword)
     rpc.setFileProvider({
-      list: () =>
-        useSharedFilesStore.getState().files.map((f) => ({
+      list: async () =>
+        useLocalFilesStore.getState().files.map((f) => ({
           name: f.name,
-          info: `${formatFileSize(f.size)} (${new Date(f.addedAt).toLocaleString()})`,
+          info: `${formatFileSize(f.size)} (${new Date(f.lastModified).toLocaleString()})`,
         })),
-      get: (name) => useSharedFilesStore.getState().files.find((f) => f.name === name)?.data ?? null,
+      get: async (name) => {
+        const { handle } = useLocalFilesStore.getState()
+        if (!handle) return null
+        return readFolderFile(handle, name)
+      },
+      remove: (name) => useLocalFilesStore.getState().removeFile(name),
     })
     rpcRef.current = rpc
 
@@ -174,6 +226,17 @@ export function useDratsEngine() {
     const mgr = transportMgrRef.current
     await mgr?.disconnect(name)
   }, [])
+
+  useEffect(() => {
+    // initEngine() only sets the SessionManager's station once, at whatever
+    // config.myCallsign happened to be at that moment (which can be the
+    // empty default if the persisted config hadn't hydrated yet, or if the
+    // engine started before the callsign was ever set). Keep it in sync for
+    // the rest of the session — every outgoing frame's source station comes
+    // from here, so a stale value corrupts chat/RPC/file-transfer traffic
+    // and any remote peer's replies get addressed to the wrong callsign.
+    sessionMgrRef.current?.setStation(config.myCallsign || 'N0CALL')
+  }, [config.myCallsign])
 
   const autoConnectRan = useRef(false)
 

@@ -7,6 +7,7 @@ import { StationStatus } from '../types'
 import type { DDT2Frame } from '../types'
 import type { ChatEngine } from '../engine/chat'
 import type { SessionManager } from '../engine/session-mgr'
+import { SESSION_POSITION } from '../engine/ddt2'
 
 interface ContextMenu {
   x: number
@@ -88,11 +89,12 @@ export function StationsList({ chatRef, sessionMgrRef, onShowOnMap }: StationsLi
     const data = new TextEncoder().encode('position?')
 
     for (const port of connectedPorts) {
+      addPing({ from: 'me', to: callsign, type: 'position_request', data: 'Position Request', timestamp: Date.now() })
       const frame: DDT2Frame = {
         header: {
           magic: 0x22,
           seq: 0,
-          sessionId: 7,
+          sessionId: SESSION_POSITION,
           type: 0,
           checksum: 0,
           length: data.length,
@@ -107,7 +109,7 @@ export function StationsList({ chatRef, sessionMgrRef, onShowOnMap }: StationsLi
         console.error('[StationsList] Position request failed for', callsign, err)
       }
     }
-  }, [ports, portStatuses, sessionMgrRef])
+  }, [ports, portStatuses, sessionMgrRef, addPing])
 
   const handleRequestAllPositions = useCallback(async () => {
     const sessionMgr = sessionMgrRef.current
@@ -119,11 +121,12 @@ export function StationsList({ chatRef, sessionMgrRef, onShowOnMap }: StationsLi
 
     for (const port of connectedPorts) {
       if (!requestingPosRef.current) break
+      addPing({ from: 'me', to: 'CQCQCQ', type: 'position_request', data: 'Position Request', timestamp: Date.now() })
       const frame: DDT2Frame = {
         header: {
           magic: 0x22,
           seq: 0,
-          sessionId: 7,
+          sessionId: SESSION_POSITION,
           type: 0,
           checksum: 0,
           length: data.length,
@@ -141,7 +144,7 @@ export function StationsList({ chatRef, sessionMgrRef, onShowOnMap }: StationsLi
     }
 
     requestingPosRef.current = false
-  }, [ports, portStatuses, sessionMgrRef])
+  }, [ports, portStatuses, sessionMgrRef, addPing])
 
   const handleQrzLookup = useCallback((callsign: string) => {
     window.open(`https://www.qrz.com/db/${callsign}`, '_blank', 'noopener')

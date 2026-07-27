@@ -30,10 +30,17 @@ interface SessionRecord {
   state: 'sync' | 'open' | 'closed'
 }
 
-const NEW_SESSION_RETRIES = 5
-const NEW_SESSION_RETRY_MS = 3000
+// Matches D-RATS's own new_session() retry schedule (control.py): 10
+// attempts, ~5s wait for the first, ~15s for the rest — tuned for slow,
+// half-duplex packet-radio links. A tighter interval (this port's original
+// 5×3s) retransmits before a real peer's ack has any chance to arrive,
+// which shows up on the peer's side as the same "new session" request
+// appearing to fire 2-3 times for what's really just one negotiation.
+const NEW_SESSION_RETRIES = 10
+const NEW_SESSION_RETRY_MS_FIRST = 5000
+const NEW_SESSION_RETRY_MS_REST = 15000
 const END_SESSION_RETRIES = 3
-const END_SESSION_RETRY_MS = 3000
+const END_SESSION_RETRY_MS = 10000
 
 export class SessionManager {
   private sessions = new Map<number, SessionRecord>()
@@ -48,9 +55,26 @@ export class SessionManager {
   private pendingAcks = new Map<number, (peerId: number) => void>()
   private pendingEnds = new Map<number, () => void>()
   private onIncomingSession: IncomingSessionCallback | null = null
+  private onOutgoing: ((frame: DDT2Frame) => void) | null = null
+  private onMissingRemoteId: ((localId: number, hasRecord: boolean) => void) | null = null
 
   setOutgoingCallback(cb: FrameCallback): void {
     this.outgoingCallback = cb
+  }
+
+  // Fires for every frame actually sent, after id/station rewriting — the
+  // only way to observe what this station transmits, since Transport's
+  // onFrame callback only ever fires for received frames.
+  setOnOutgoing(cb: (frame: DDT2Frame) => void): void {
+    this.onOutgoing = cb
+  }
+
+  // Diagnostic: fires if we're about to send on a negotiated session for
+  // which we don't (yet, or ever) know the peer's chosen id — the frame
+  // will go out carrying our own local id instead, which only reaches the
+  // peer if it happens to have picked the same number independently.
+  setOnMissingRemoteId(cb: (localId: number, hasRecord: boolean) => void): void {
+    this.onMissingRemoteId = cb
   }
 
   setStation(callsign: string): void {
@@ -197,12 +221,16 @@ export class SessionManager {
       frame.header.sessionId !== SESSION_CHAT &&
       frame.header.sessionId !== SESSION_RPC
     ) {
-      const record = this.sessions.get(frame.header.sessionId)
+      const localId = frame.header.sessionId
+      const record = this.sessions.get(localId)
       if (record?.remoteId != null) {
         frame.header.sessionId = record.remoteId
+      } else {
+        this.onMissingRemoteId?.(localId, record !== undefined)
       }
     }
 
+    this.onOutgoing?.(frame)
     await this.outgoingCallback(frame, portName)
   }
 
@@ -222,6 +250,7 @@ export class SessionManager {
     })
 
     for (let attempt = 0; attempt < NEW_SESSION_RETRIES; attempt++) {
+      const waitMs = attempt === 0 ? NEW_SESSION_RETRY_MS_FIRST : NEW_SESSION_RETRY_MS_REST
       const peerId = await new Promise<number | null>((resolve) => {
         this.pendingAcks.set(localId, resolve)
         void this.sendControlFrame(
@@ -234,7 +263,7 @@ export class SessionManager {
             this.pendingAcks.delete(localId)
             resolve(null)
           }
-        }, NEW_SESSION_RETRY_MS)
+        }, waitMs)
       })
 
       if (peerId !== null) return localId

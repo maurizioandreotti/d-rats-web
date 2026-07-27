@@ -18,6 +18,22 @@ function makeLinkedStation(callsign: string) {
   return { sessionMgr, fileTransfer, rpc }
 }
 
+// A minimal stateful FileProvider backing store, so delete can be verified
+// against a subsequent list rather than just its own ack.
+function makeFileProvider(initial: { name: string; info: string; data: Uint8Array }[]) {
+  const files = [...initial]
+  return {
+    list: async () => files.map(({ name, info }) => ({ name, info })),
+    get: async (name: string) => files.find((f) => f.name === name)?.data ?? null,
+    remove: async (name: string) => {
+      const idx = files.findIndex((f) => f.name === name)
+      if (idx === -1) return false
+      files.splice(idx, 1)
+      return true
+    },
+  }
+}
+
 function link(
   a: ReturnType<typeof makeLinkedStation>,
   b: ReturnType<typeof makeLinkedStation>,
@@ -59,10 +75,9 @@ describe('RPC file list + pull end-to-end', () => {
     const stationB = makeLinkedStation('W2BBB')
     link(stationA, stationB)
 
-    stationB.rpc.setFileProvider({
-      list: () => [{ name: 'readme.txt', info: '1.0 KB (just now)' }],
-      get: () => null,
-    })
+    stationB.rpc.setFileProvider(
+      makeFileProvider([{ name: 'readme.txt', info: '1.0 KB (just now)', data: new Uint8Array() }]),
+    )
 
     const files = await stationA.rpc.listFiles('W2BBB')
     expect(files).toEqual([{ name: 'readme.txt', info: '1.0 KB (just now)' }])
@@ -74,10 +89,7 @@ describe('RPC file list + pull end-to-end', () => {
     link(stationA, stationB)
 
     const original = new Uint8Array([9, 8, 7, 6, 5])
-    stationB.rpc.setFileProvider({
-      list: () => [{ name: 'data.bin', info: '5 B' }],
-      get: (name) => (name === 'data.bin' ? original : null),
-    })
+    stationB.rpc.setFileProvider(makeFileProvider([{ name: 'data.bin', info: '5 B', data: original }]))
 
     let offeredSessionId: number | null = null
     let resolveDone: () => void
@@ -108,9 +120,69 @@ describe('RPC file list + pull end-to-end', () => {
     const stationB = makeLinkedStation('W2FFF')
     link(stationA, stationB)
 
-    stationB.rpc.setFileProvider({ list: () => [], get: () => null })
+    stationB.rpc.setFileProvider(makeFileProvider([]))
 
     const result = await stationA.rpc.pullFile('W2FFF', 'missing.bin')
     expect(result).toEqual({ ok: false, message: 'File not found' })
+  })
+
+  it('deletes a shared file and reflects the removal in a subsequent list', async () => {
+    const stationA = makeLinkedStation('W2GGG')
+    const stationB = makeLinkedStation('W2HHH')
+    link(stationA, stationB)
+
+    stationB.rpc.setFileProvider(
+      makeFileProvider([{ name: 'old.log', info: '1 B', data: new Uint8Array([1]) }]),
+    )
+    stationB.rpc.setDeletePassword(() => 'secret')
+
+    const before = await stationA.rpc.listFiles('W2HHH')
+    expect(before.map((f) => f.name)).toEqual(['old.log'])
+
+    const result = await stationA.rpc.deleteFile('W2HHH', 'old.log', 'secret')
+    expect(result).toEqual({ ok: true, message: 'OK' })
+
+    const after = await stationA.rpc.listFiles('W2HHH')
+    expect(after).toEqual([])
+  })
+
+  it('reports an error deleting a file that does not exist', async () => {
+    const stationA = makeLinkedStation('W2III')
+    const stationB = makeLinkedStation('W2JJJ')
+    link(stationA, stationB)
+
+    stationB.rpc.setFileProvider(makeFileProvider([]))
+    stationB.rpc.setDeletePassword(() => 'secret')
+
+    const result = await stationA.rpc.deleteFile('W2JJJ', 'missing.bin', 'secret')
+    expect(result).toEqual({ ok: false, message: 'File not found' })
+  })
+
+  it('rejects a remote delete when no password is configured', async () => {
+    const stationA = makeLinkedStation('W2KKK')
+    const stationB = makeLinkedStation('W2LLL')
+    link(stationA, stationB)
+
+    stationB.rpc.setFileProvider(
+      makeFileProvider([{ name: 'keep.me', info: '1 B', data: new Uint8Array([1]) }]),
+    )
+    // No setDeletePassword() call — matches the "blank disables remote delete" default.
+
+    const result = await stationA.rpc.deleteFile('W2LLL', 'keep.me', 'anything')
+    expect(result).toEqual({ ok: false, message: 'Incorrect password' })
+  })
+
+  it('rejects a remote delete with the wrong password', async () => {
+    const stationA = makeLinkedStation('W2MMM')
+    const stationB = makeLinkedStation('W2NNN')
+    link(stationA, stationB)
+
+    stationB.rpc.setFileProvider(
+      makeFileProvider([{ name: 'keep.me', info: '1 B', data: new Uint8Array([1]) }]),
+    )
+    stationB.rpc.setDeletePassword(() => 'secret')
+
+    const result = await stationA.rpc.deleteFile('W2NNN', 'keep.me', 'wrong')
+    expect(result).toEqual({ ok: false, message: 'Incorrect password' })
   })
 })

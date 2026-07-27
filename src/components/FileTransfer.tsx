@@ -1,5 +1,11 @@
-import { useState, useCallback } from 'react'
+import { useCallback, useEffect } from 'react'
 import { useFileStore } from '../store/file-store'
+import { useStationStore } from '../store/station-store'
+import { useConfigStore } from '../store/config-store'
+import { usePortStore } from '../store/port-store'
+import { useRpcStore } from '../store/rpc-store'
+import { useLocalFilesStore } from '../store/local-files-store'
+import { useEventStore } from '../store/event-store'
 import type { FileTransferEngine } from '../engine/file'
 import type { RPCEngine } from '../engine/rpc'
 import { formatFileSize as formatSize } from '../utils/format'
@@ -18,61 +24,58 @@ function formatPct(transferred: number, total: number): string {
 
 export function FileTransfer({ fileRef, rpcRef }: FileTransferProps) {
   const transfers = useFileStore((s) => s.transfers)
-  const addTransfer = useFileStore((s) => s.addTransfer)
   const updateTransfer = useFileStore((s) => s.updateTransfer)
   const clearTransfers = useFileStore((s) => s.clearTransfers)
 
-  const [dest, setDest] = useState('CQCQCQ')
-  const [file, setFile] = useState<File | null>(null)
-  const [sending, setSending] = useState(false)
-  const [error, setError] = useState('')
+  const stations = useStationStore((s) => s.stations)
+  const heardStations = Object.keys(stations).sort()
 
-  const handleSend = useCallback(async () => {
-    if (!file || !fileRef.current) return
-    setSending(true)
-    setError('')
+  const config = useConfigStore((s) => s.config)
+  const portStatuses = usePortStore((s) => s.statuses)
+  const connectedPorts = config.ports.filter((p) => portStatuses[p.name] === 'connected')
 
-    const id = crypto.randomUUID()
-    try {
-      const data = new Uint8Array(await file.arrayBuffer())
-      addTransfer({
-        id,
-        sessionId: -1,
-        filename: file.name,
-        size: data.byteLength,
-        transferred: 0,
-        direction: 'send',
-        state: 'transferring',
-        station: dest,
-      })
-      await fileRef.current.sendFile(file.name, data, dest, (sessionId) => updateTransfer(id, { sessionId }))
-    } catch (err) {
-      updateTransfer(id, { state: 'error' })
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setSending(false)
-    }
-  }, [file, dest, fileRef, addTransfer, updateTransfer])
+  // Shared between the Local pane (Upload target) and the Remote pane
+  // (Connect/Download/Delete target) — one station selector drives both,
+  // matching D-RATS's single Files tab. Lives in rpc-store, not component
+  // state, so it (and the Remote pane's connection) survives switching to
+  // another tab and back.
+  const station = useRpcStore((s) => s.selectedStation)
+  const setStation = useRpcStore((s) => s.setSelectedStation)
+  const port = useRpcStore((s) => s.selectedPort)
+  const setPort = useRpcStore((s) => s.setSelectedPort)
 
-  const handleAccept = useCallback(
-    (sessionId: number) => {
-      void fileRef.current?.acceptOffer(sessionId)
-    },
-    [fileRef],
-  )
+  useEffect(() => {
+    if (!port && connectedPorts.length > 0) setPort(connectedPorts[0]!.name)
+  }, [connectedPorts, port, setPort])
 
-  const handleReject = useCallback(
+  const handleAbort = useCallback(
     (id: string, sessionId: number) => {
-      fileRef.current?.rejectFile(sessionId)
-      updateTransfer(id, { state: 'error' })
+      fileRef.current?.cancelTransfer(sessionId)
+      updateTransfer(id, { state: 'error', timestamp: Date.now() })
     },
     [fileRef, updateTransfer],
   )
 
-  const handleDownload = useCallback(
-    (sessionId: number, filename: string) => {
+  const handleSave = useCallback(
+    async (sessionId: number, filename: string) => {
       const data = fileRef.current?.getCompletedData(sessionId)
       if (!data) return
+
+      const { handle, addFile } = useLocalFilesStore.getState()
+      if (handle) {
+        // Save alongside the shared files, same as D-RATS's download_dir —
+        // not the browser's generic Downloads folder.
+        await addFile(filename, data)
+        useEventStore.getState().addEvent({
+          time: Date.now(),
+          text: `[File] Saved "${filename}" to the shared folder`,
+          type: 'frame',
+        })
+        return
+      }
+
+      // No shared folder configured (Config → File Transfer) — fall back to
+      // a normal browser save/download.
       const buffer = new ArrayBuffer(data.byteLength)
       new Uint8Array(buffer).set(data)
       const blob = new Blob([buffer])
@@ -89,31 +92,6 @@ export function FileTransfer({ fileRef, rpcRef }: FileTransferProps) {
   return (
     <div>
       <h2>File Transfer</h2>
-
-      <div className="panel-card">
-        <h3>Send File</h3>
-        <div className="form-row">
-          <label htmlFor="file-dest">Destination</label>
-          <input
-            id="file-dest"
-            type="text"
-            value={dest}
-            onChange={(e) => setDest(e.target.value.toUpperCase())}
-            placeholder="Callsign or CQCQCQ"
-          />
-        </div>
-        <div className="form-row">
-          <input
-            type="file"
-            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-          />
-        </div>
-        <button className="btn btn-primary" onClick={handleSend} disabled={!file || sending || dest === 'CQCQCQ'}>
-          {sending ? 'Sending…' : 'Send'}
-        </button>
-        {dest === 'CQCQCQ' && <p className="empty-state">File transfer needs a specific destination callsign.</p>}
-        {error && <p className="empty-state">{error}</p>}
-      </div>
 
       <div className="panel-card">
         <div className="card-header-row">
@@ -153,19 +131,14 @@ export function FileTransfer({ fileRef, rpcRef }: FileTransferProps) {
             </div>
             <div className="transfer-state">
               {t.state}
-              {t.state === 'offer' && (
-                <>
-                  <button className="btn btn-primary btn-sm" onClick={() => handleAccept(t.sessionId)}>
-                    Accept
-                  </button>
-                  <button className="btn btn-secondary btn-sm" onClick={() => handleReject(t.id, t.sessionId)}>
-                    Reject
-                  </button>
-                </>
+              {(t.state === 'transferring' || t.state === 'offer') && (
+                <button className="btn btn-danger-outline btn-sm" onClick={() => handleAbort(t.id, t.sessionId)}>
+                  Abort
+                </button>
               )}
               {t.state === 'complete' && t.direction === 'receive' && (
-                <button className="btn btn-secondary btn-sm" onClick={() => handleDownload(t.sessionId, t.filename)}>
-                  Download
+                <button className="btn btn-secondary btn-sm" onClick={() => void handleSave(t.sessionId, t.filename)}>
+                  Save
                 </button>
               )}
             </div>
@@ -173,8 +146,18 @@ export function FileTransfer({ fileRef, rpcRef }: FileTransferProps) {
         ))}
       </div>
 
-      <SharedFiles />
-      <RemoteBrowser rpcRef={rpcRef} />
+      <div className="file-explorer">
+        <SharedFiles fileRef={fileRef} station={station} />
+        <RemoteBrowser
+          rpcRef={rpcRef}
+          heardStations={heardStations}
+          station={station}
+          onStationChange={setStation}
+          connectedPorts={connectedPorts}
+          port={port}
+          onPortChange={setPort}
+        />
+      </div>
     </div>
   )
 }

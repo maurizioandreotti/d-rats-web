@@ -1,8 +1,9 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { useDratsEngine } from '../hooks/useDratsEngine'
 import { usePortStore } from '../store/port-store'
 import { useConfigStore } from '../store/config-store'
 import { useStationStore } from '../store/station-store'
+import { useLocalFilesStore } from '../store/local-files-store'
 import { SerialConnect } from './SerialConnect'
 import { ChatPanel } from './ChatPanel'
 import { MapPanel } from './MapPanel'
@@ -45,6 +46,13 @@ export function Layout() {
   const portStatuses = usePortStore((s) => s.statuses)
   const config = useConfigStore((s) => s.config)
   const stations = useStationStore((s) => s.stations)
+
+  useEffect(() => {
+    // Restores a previously picked shared folder (if any) regardless of
+    // which tab loads first — SharedFiles/ConfigPanel both just read the
+    // resulting state rather than triggering this themselves.
+    void useLocalFilesStore.getState().init()
+  }, [])
 
   const connectedPorts = config.ports.filter((p) => portStatuses[p.name] === 'connected')
   const connectedCount = connectedPorts.length

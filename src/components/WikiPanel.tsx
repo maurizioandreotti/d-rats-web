@@ -3,12 +3,14 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeSlug from 'rehype-slug'
 import wikiIndex from '../../docs/wiki/index.md?raw'
+import wikiFeatures from '../../docs/wiki/features.md?raw'
 import wikiRadioSetup from '../../docs/wiki/radio-setup.md?raw'
 import wikiTechnical from '../../docs/wiki/technical.md?raw'
 import wikiTroubleshooting from '../../docs/wiki/troubleshooting.md?raw'
 
 const PAGES: Record<string, { title: string; content: string }> = {
   index: { title: 'Wiki Home', content: wikiIndex },
+  features: { title: 'Features', content: wikiFeatures },
   'radio-setup': { title: 'Radio Setup', content: wikiRadioSetup },
   technical: { title: 'Technical Aspects', content: wikiTechnical },
   troubleshooting: { title: 'Troubleshooting', content: wikiTroubleshooting },

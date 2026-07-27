@@ -10,6 +10,7 @@ export class RatflectorConnection {
   private buffer = new Uint8Array(0)
   private onFrame: ((frame: DDT2Frame) => void) | null = null
   private onStatus: ((status: RatflectorStatus, message: string) => void) | null = null
+  private onDecodeError: ((rawFrame: Uint8Array) => void) | null = null
   private authenticated = false
   private errored = false
   private authQueue: Array<{ code: number; message: string }> = []
@@ -22,6 +23,10 @@ export class RatflectorConnection {
 
   setOnStatus(cb: (status: RatflectorStatus, message: string) => void): void {
     this.onStatus = cb
+  }
+
+  setOnDecodeError(cb: (rawFrame: Uint8Array) => void): void {
+    this.onDecodeError = cb
   }
 
   async connect(host: string, port: number, callsign: string, password: string, bridgeUrl?: string): Promise<void> {
@@ -208,6 +213,8 @@ export class RatflectorConnection {
       decodeFrame(frameData).then((frame) => {
         if (frame) {
           this.onFrame?.(frame)
+        } else {
+          this.onDecodeError?.(frameData)
         }
       })
     }

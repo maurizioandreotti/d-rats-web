@@ -71,15 +71,7 @@ export interface FileTransferItem {
   direction: 'send' | 'receive'
   state: 'offer' | 'transferring' | 'complete' | 'error'
   station: string
-}
-
-// A file the user has offered up for other stations to discover via RPC
-// file-list and retrieve via RPC pull-file (see engine/rpc.ts).
-export interface SharedFile {
-  name: string
-  size: number
-  data: Uint8Array
-  addedAt: number
+  timestamp: number
 }
 
 export interface RemoteFileEntry {
@@ -119,7 +111,7 @@ export interface PortConfig {
 export interface PingInfo {
   from: string
   to: string
-  type: 'request' | 'response' | 'echo_request' | 'echo_response'
+  type: 'request' | 'response' | 'echo_request' | 'echo_response' | 'position_request' | 'position_response'
   data: string
   timestamp: number
 }
@@ -138,4 +130,10 @@ export interface AppConfig {
   myPosition?: GPSPosition
   focusCenter?: [number, number]
   autoConnect: boolean
+  // Matches D-RATS's "Remote file transfers" checkbox (prefs.allow_remote_files)
+  // — gates RPC pull-file requests from other stations, not listing.
+  allowRemoteFileTransfers: boolean
+  // Matches D-RATS's remote_admin_passwd — empty means remote delete is
+  // always rejected regardless of what a request sends.
+  remoteDeletePassword: string
 }

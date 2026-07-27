@@ -14,6 +14,10 @@ export const SESSION_CHAT = 1
 // Fixed by registration-order convention (control, chat, rpc), matching
 // reference D-RATS peers — never negotiated over the control channel.
 export const SESSION_RPC = 2
+// Ad-hoc, unnegotiated slot used for plain-text "position?" requests (and
+// whatever position-bearing text comes back on it) — not part of the
+// control-channel handshake, same spirit as SESSION_CHAT/SESSION_RPC.
+export const SESSION_POSITION = 7
 
 function padCallsign(call: string): Uint8Array {
   const encoder = new TextEncoder()
@@ -27,6 +31,44 @@ function trimCallsign(bytes: Uint8Array<ArrayBuffer>): string {
   return decoder.decode(cleaned)
 }
 
+async function drain(readable: ReadableStream<Uint8Array>): Promise<Uint8Array> {
+  const reader = readable.getReader()
+  const chunks: Uint8Array[] = []
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+    chunks.push(value!)
+  }
+  const totalLen = chunks.reduce((a, c) => a + c.length, 0)
+  const combined = new Uint8Array(totalLen)
+  let offset = 0
+  for (const chunk of chunks) {
+    combined.set(chunk, offset)
+    offset += chunk.length
+  }
+  return combined
+}
+
+// Raw zlib deflate/inflate, exported for reuse by file.ts — D-RATS's file
+// transfer protocol compresses a file's bytes once with a separate zlib
+// pass of its own, independent of (and in addition to) the DDT2 frame-level
+// compression these two are normally used for here.
+export async function deflate(data: Uint8Array): Promise<Uint8Array> {
+  const cs = new CompressionStream('deflate')
+  const writer = cs.writable.getWriter()
+  void writer.write(data as Uint8Array<ArrayBuffer>)
+  void writer.close()
+  return drain(cs.readable)
+}
+
+export async function inflate(data: Uint8Array): Promise<Uint8Array> {
+  const cs = new DecompressionStream('deflate')
+  const writer = cs.writable.getWriter()
+  void writer.write(data as Uint8Array<ArrayBuffer>)
+  void writer.close()
+  return drain(cs.readable)
+}
+
 export async function encodeFrame(
   frame: DDT2Frame,
   compress = true,
@@ -35,25 +77,7 @@ export async function encodeFrame(
 
   let data: Uint8Array = frame.data
   if (compress) {
-    const cs = new CompressionStream('deflate')
-    const writer = cs.writable.getWriter()
-    writer.write(data as Uint8Array<ArrayBuffer>)
-    writer.close()
-    const reader = cs.readable.getReader()
-    const chunks: Uint8Array[] = []
-    while (true) {
-      const { value, done } = await reader.read()
-      if (done) break
-      chunks.push(value!)
-    }
-    const totalLen = chunks.reduce((a, c) => a + c.length, 0)
-    const combined = new Uint8Array(totalLen)
-    let offset = 0
-    for (const chunk of chunks) {
-      combined.set(chunk, offset)
-      offset += chunk.length
-    }
-    data = combined
+    data = await deflate(data)
   }
 
   const sStation = padCallsign(frame.header.sourceStation)
@@ -135,31 +159,13 @@ export async function decodeFrame(wireData: Uint8Array): Promise<DDT2Frame | nul
   let data: Uint8Array
   if (compressed) {
     try {
-      const cs = new DecompressionStream('deflate')
-      const writer = cs.writable.getWriter()
-      writer.write(payload as Uint8Array<ArrayBuffer>)
-      writer.close()
-      const reader = cs.readable.getReader()
-      const chunks: Uint8Array[] = []
-      while (true) {
-        const { value, done } = await reader.read()
-        if (done) break
-        chunks.push(value!)
-      }
-      const totalLen = chunks.reduce((a, c) => a + c.length, 0)
-      const combined = new Uint8Array(totalLen)
-      let offset = 0
-      for (const chunk of chunks) {
-        combined.set(chunk, offset)
-        offset += chunk.length
-      }
-      data = combined
+      data = await inflate(payload)
     } catch {
       return null
     }
   } else {
-      data = new Uint8Array(payload) as Uint8Array<ArrayBuffer>
-    }
+    data = new Uint8Array(payload) as Uint8Array<ArrayBuffer>
+  }
 
     return {
       header: {

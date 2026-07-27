@@ -24,6 +24,13 @@ function link(
     to: ReturnType<typeof makeLinkedStation>,
   ) => {
     from.sessionMgr.setOutgoingCallback(async (frame: DDT2Frame) => {
+      // A real radio link filters by destination — unlike a version of this
+      // harness that delivered everything unconditionally, which let a
+      // misaddressed reply (right session/type, wrong destStation) "work"
+      // in tests while silently going nowhere against a real peer.
+      const dest = frame.header.destStation
+      if (dest !== to.sessionMgr.getStation() && dest !== 'CQCQCQ') return
+
       await to.sessionMgr.incoming(frame)
       if (frame.header.sessionId !== SESSION_CONTROL) {
         await to.fileTransfer.handleIncoming(frame)
@@ -44,7 +51,8 @@ describe('file transfer end-to-end (control handshake + windowed ACK)', () => {
     stationB.fileTransfer.setOnOffer((filename, _size, sessionId) => {
       expect(filename).toBe('test.bin')
       offeredSessionId = sessionId
-      void stationB.fileTransfer.acceptOffer(sessionId)
+      // No manual accept needed — matches the reference protocol, which has
+      // no accept/reject gate at all; every offer is auto-acked.
     })
 
     const original = new Uint8Array(3000)
@@ -62,7 +70,7 @@ describe('file transfer end-to-end (control handshake + windowed ACK)', () => {
     expect(stationA.fileTransfer.getTransfer(sessionId)?.phase).toBe('complete')
   }, 15000)
 
-  it('rejects an offer and does not deliver data', async () => {
+  it('cancelling as soon as the offer arrives prevents delivery', async () => {
     const stationA = makeLinkedStation('W1CCC')
     const stationB = makeLinkedStation('W1DDD')
     link(stationA, stationB)
@@ -70,15 +78,17 @@ describe('file transfer end-to-end (control handshake + windowed ACK)', () => {
     let offeredSessionId: number | null = null
     stationB.fileTransfer.setOnOffer((_filename, _size, sessionId) => {
       offeredSessionId = sessionId
-      stationB.fileTransfer.rejectFile(sessionId)
+      // Cancelling before the automatic accept runs stops it from ever
+      // acking the offer — simulates a user clicking Stop right away.
+      stationB.fileTransfer.cancelTransfer(sessionId)
     })
 
     const original = new Uint8Array([1, 2, 3, 4])
 
     // The sender will never get a start-of-transfer response since the
-    // receiver rejected instead of accepting, so it should time out and fail
-    // rather than silently "succeed".
-    await expect(stationA.fileTransfer.sendFile('rejected.bin', original, 'W1DDD')).rejects.toThrow()
+    // receiver cancelled instead of accepting, so it should time out and
+    // fail rather than silently "succeed".
+    await expect(stationA.fileTransfer.sendFile('cancelled.bin', original, 'W1DDD')).rejects.toThrow()
 
     expect(offeredSessionId).not.toBeNull()
     expect(stationB.fileTransfer.getCompletedData(offeredSessionId!)).toBeNull()

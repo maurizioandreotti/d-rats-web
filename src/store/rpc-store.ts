@@ -2,38 +2,49 @@ import { create } from 'zustand'
 import type { RemoteFileEntry } from '../types'
 
 interface StationListing {
-  status: 'loading' | 'loaded' | 'error'
+  status: 'disconnected' | 'connecting' | 'connected' | 'error'
   files: RemoteFileEntry[]
   error: string
-  pulling: string | null
 }
 
 interface RpcState {
   listings: Record<string, StationListing>
-  setLoading: (station: string) => void
-  setLoaded: (station: string, files: RemoteFileEntry[]) => void
+  // Lives here rather than as component state so the Files tab's Remote
+  // pane (station/port picked, current listing) survives switching to
+  // another tab and back — a component-local useState gets wiped by the
+  // unmount that happens when the tab isn't the active one.
+  selectedStation: string
+  selectedPort: string
+  setSelectedStation: (station: string) => void
+  setSelectedPort: (port: string) => void
+  setConnecting: (station: string) => void
+  setConnected: (station: string, files: RemoteFileEntry[]) => void
   setError: (station: string, error: string) => void
-  setPulling: (station: string, filename: string | null) => void
+  setDisconnected: (station: string) => void
 }
 
-const emptyListing = (): StationListing => ({ status: 'loading', files: [], error: '', pulling: null })
+const emptyListing = (): StationListing => ({ status: 'disconnected', files: [], error: '' })
 
 export const useRpcStore = create<RpcState>()((set) => ({
   listings: {},
-  setLoading: (station) =>
+  selectedStation: '',
+  selectedPort: '',
+  setSelectedStation: (station) => set({ selectedStation: station }),
+  setSelectedPort: (port) => set({ selectedPort: port }),
+  setConnecting: (station) =>
     set((state) => ({
-      listings: { ...state.listings, [station]: { ...emptyListing(), ...state.listings[station], status: 'loading', error: '' } },
+      listings: { ...state.listings, [station]: { ...emptyListing(), ...state.listings[station], status: 'connecting', error: '' } },
     })),
-  setLoaded: (station, files) =>
+  setConnected: (station, files) =>
     set((state) => ({
-      listings: { ...state.listings, [station]: { ...emptyListing(), ...state.listings[station], status: 'loaded', files, error: '' } },
+      listings: { ...state.listings, [station]: { ...emptyListing(), ...state.listings[station], status: 'connected', files, error: '' } },
     })),
   setError: (station, error) =>
     set((state) => ({
       listings: { ...state.listings, [station]: { ...emptyListing(), ...state.listings[station], status: 'error', error } },
     })),
-  setPulling: (station, filename) =>
+  setDisconnected: (station) =>
     set((state) => ({
-      listings: { ...state.listings, [station]: { ...emptyListing(), ...state.listings[station], pulling: filename } },
+      listings: { ...state.listings, [station]: emptyListing() },
     })),
 }))

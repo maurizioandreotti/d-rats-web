@@ -11,7 +11,7 @@ interface ConfigState {
   resetConfig: () => void
 }
 
-const CURRENT_VERSION = 2
+const CURRENT_VERSION = 3
 
 const DEFAULT_CONFIG: AppConfig = {
   myCallsign: '',
@@ -56,6 +56,8 @@ const DEFAULT_CONFIG: AppConfig = {
   mapZoom: 8,
   myPosition: undefined,
   autoConnect: false,
+  allowRemoteFileTransfers: true,
+  remoteDeletePassword: '',
 }
 
 export const useConfigStore = create<ConfigState>()(

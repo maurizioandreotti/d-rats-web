@@ -1,4 +1,6 @@
 import { useConfigStore } from '../store/config-store'
+import { useLocalFilesStore } from '../store/local-files-store'
+import { isSupported as folderPickerSupported } from '../engine/local-files'
 import { useState, useRef, useCallback } from 'react'
 import { MapContainer, TileLayer, useMapEvents } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
@@ -17,7 +19,18 @@ export function ConfigPanel() {
   const { config, updateConfig, resetConfig } = useConfigStore()
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [showPicker, setShowPicker] = useState(false)
+  const [showSaved, setShowSaved] = useState(false)
   const myPos = config.myPosition
+
+  const handleApply = useCallback(() => {
+    setShowSaved(true)
+    setTimeout(() => setShowSaved(false), 2000)
+  }, [])
+
+  const folderName = useLocalFilesStore((s) => s.folderName)
+  const folderPermission = useLocalFilesStore((s) => s.permission)
+  const pickFolder = useLocalFilesStore((s) => s.pick)
+  const reconnectFolder = useLocalFilesStore((s) => s.reconnect)
 
   const handleExport = () => {
     const json = JSON.stringify(config, null, 2)
@@ -68,7 +81,14 @@ export function ConfigPanel() {
 
   return (
     <div>
-      <h2>Configuration</h2>
+      <div className="panel-header">
+        <h2>Configuration</h2>
+        <div className="config-apply-row">
+          {showSaved && <span className="config-saved-badge">✓ Saved</span>}
+          <button className="btn btn-primary btn-sm" onClick={handleApply}>Apply</button>
+        </div>
+      </div>
+      <p className="help-text">Changes save automatically as you type — Apply just confirms the current values are saved.</p>
 
       <div className="panel-card">
         <h3>Station</h3>
@@ -186,33 +206,31 @@ export function ConfigPanel() {
             <span>{toMaidenhead(myPos.lat, myPos.lon)}</span>
           </div>
         )}
-        <button className="btn btn-secondary" onClick={() => setShowPicker(true)}>
-          Pick on Map
-        </button>
-        <div className="form-row">
-          <label htmlFor="mapLat">Default Latitude</label>
-          <input
-            id="mapLat"
-            type="number"
-            step="0.01"
-            value={config.mapCenter[0]}
-            onChange={(e) =>
-              updateConfig({ mapCenter: [Number(e.target.value), config.mapCenter[1]] })
-            }
-          />
-        </div>
-        <div className="form-row">
-          <label htmlFor="mapLon">Default Longitude</label>
-          <input
-            id="mapLon"
-            type="number"
-            step="0.01"
-            value={config.mapCenter[1]}
-            onChange={(e) =>
-              updateConfig({ mapCenter: [config.mapCenter[0], Number(e.target.value)] })
-            }
-          />
-        </div>
+        {!showPicker ? (
+          <button className="btn btn-secondary" onClick={() => setShowPicker(true)}>
+            Pick on Map
+          </button>
+        ) : (
+          <div className="inline-map-picker">
+            <div className="inline-map-picker-header">
+              <span>Click anywhere on the map to set your position.</span>
+              <button className="btn btn-sm" onClick={() => setShowPicker(false)}>Close</button>
+            </div>
+            <div className="inline-map-picker-map">
+              <MapContainer
+                center={myPos ? [myPos.lat, myPos.lon] : config.mapCenter}
+                zoom={config.mapZoom}
+                className="map-inner"
+              >
+                <TileLayer
+                  attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+                  url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+                />
+                <PickerMap onPick={handlePick} />
+              </MapContainer>
+            </div>
+          </div>
+        )}
         <div className="form-row">
           <label htmlFor="mapZoom">Default Zoom</label>
           <input
@@ -222,6 +240,47 @@ export function ConfigPanel() {
             max="19"
             value={config.mapZoom}
             onChange={(e) => updateConfig({ mapZoom: Number(e.target.value) })}
+          />
+        </div>
+      </div>
+
+      <div className="panel-card">
+        <h3>File Transfer</h3>
+        <div className="form-row">
+          <label>Shared Folder</label>
+          {!folderPickerSupported() ? (
+            <span className="help-text">Not supported in this browser — try Chrome or Edge.</span>
+          ) : folderName ? (
+            <>
+              <span>{folderName}</span>
+              {folderPermission === 'needs-permission' && (
+                <button className="btn btn-sm" onClick={() => void reconnectFolder()}>Reconnect</button>
+              )}
+              <button className="btn btn-sm btn-secondary" onClick={() => void pickFolder()}>Change…</button>
+            </>
+          ) : (
+            <button className="btn btn-sm btn-primary" onClick={() => void pickFolder()}>Choose Folder…</button>
+          )}
+        </div>
+        <p className="help-text">The folder listed in the Files tab's Local pane and served to other stations.</p>
+        <div className="form-row">
+          <label htmlFor="allow-remote-files">Remote file transfers</label>
+          <input
+            id="allow-remote-files"
+            type="checkbox"
+            checked={config.allowRemoteFileTransfers}
+            onChange={(e) => updateConfig({ allowRemoteFileTransfers: e.target.checked })}
+          />
+        </div>
+        <p className="help-text">Allow remote stations to pull files from your Local folder.</p>
+        <div className="form-row">
+          <label htmlFor="delete-passwd">Remote Delete Password</label>
+          <input
+            id="delete-passwd"
+            type="password"
+            value={config.remoteDeletePassword}
+            onChange={(e) => updateConfig({ remoteDeletePassword: e.target.value })}
+            placeholder="Blank disables remote delete"
           />
         </div>
       </div>
@@ -238,31 +297,6 @@ export function ConfigPanel() {
           Reset to Defaults
         </button>
       </div>
-
-      {showPicker && (
-        <div className="modal-overlay" onClick={() => setShowPicker(false)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3>Pick your position on the map</h3>
-              <button className="btn btn-sm" onClick={() => setShowPicker(false)}>Close</button>
-            </div>
-            <div className="modal-map">
-              <MapContainer
-                center={myPos ? [myPos.lat, myPos.lon] : config.mapCenter}
-                zoom={config.mapZoom}
-                className="map-inner"
-              >
-                <TileLayer
-                  attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-                  url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
-                />
-                <PickerMap onPick={handlePick} />
-              </MapContainer>
-            </div>
-            <p className="note">Click anywhere on the map to set your position.</p>
-          </div>
-        </div>
-      )}
     </div>
   )
 }

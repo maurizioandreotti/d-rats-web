@@ -126,6 +126,13 @@ export class TransportManager {
       transport.setOnFrame((frame) => this.onFrame?.(frame, name))
       transport.setOnGpsString((text) => this.handleRawGps(text, name))
       transport.setOnRawText((text) => this.handleRawText(text, name))
+      transport.setOnDecodeError((rawFrame) => {
+        useEventStore.getState().addEvent({
+          time: Date.now(),
+          text: `[Frame] Failed to decode a ${rawFrame.length}-byte frame on ${name} (CRC/yEnc/zlib mismatch) — dropped`,
+          type: 'raw',
+        })
+      })
 
       const baudRate = config.serial?.baudRate ?? 9600
       await serial.connect(port, {
@@ -175,6 +182,13 @@ export class TransportManager {
       const conn = new RatflectorConnection()
       conn.setOnFrame((frame) => this.onFrame?.(frame, name))
       conn.setOnStatus((status, msg) => setStatus(name, status, msg))
+      conn.setOnDecodeError((rawFrame) => {
+        useEventStore.getState().addEvent({
+          time: Date.now(),
+          text: `[Frame] Failed to decode a ${rawFrame.length}-byte frame on ${name} (CRC/yEnc/zlib mismatch) — dropped`,
+          type: 'raw',
+        })
+      })
 
       await conn.connect(rf.host, rf.port, rf.callsign, rf.password, rf.bridgeUrl)
       this.ratflectorTransports.set(name, conn)

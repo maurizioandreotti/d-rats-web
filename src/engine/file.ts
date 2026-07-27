@@ -1,11 +1,16 @@
 import type { DDT2Frame } from '../types'
 import { SessionManager } from './session-mgr'
 import { SESSION_TYPE_FILEXFER } from './control'
+import { deflate, inflate } from './ddt2'
 
 export const FILE_BLOCK_SIZE = 1024
 export const FILE_WINDOW_SIZE = 8
 export const FILE_MAX_RETRIES = 10
-export const FILE_MIN_TIMEOUT_MS = 12000
+// Base REQACK wait, in ms — D-RATS's stateful.py grows this per attempt
+// (4s, 8s, 12s, 16s... i.e. base * (attempt+1)) rather than using a fixed
+// wait, since a real half-duplex radio link's round trip can easily exceed
+// a short fixed timeout, causing spurious retries.
+export const FILE_MIN_TIMEOUT_MS = 4000
 export const FILE_OFFER_RESPONSE_TIMEOUT_MS = 20000
 
 // DDT2 header `type` values for a stateful (session id >= 2) data channel.
@@ -20,6 +25,7 @@ export type FileTransferProgressCallback = (
   sessionId: number,
 ) => void
 export type FileOfferCallback = (filename: string, size: number, sessionId: number, fromStation: string) => void
+export type FileTransferDropCallback = (sessionId: number, fromStation: string, frameType: number) => void
 
 type TransferPhase = 'awaiting-offer' | 'awaiting-accept' | 'awaiting-response' | 'transferring' | 'complete' | 'failed'
 
@@ -31,8 +37,13 @@ interface TransferState {
   direction: 'send' | 'receive'
   phase: TransferPhase
   oseq: number
-  // receive-side reassembly
+  // receive-side reassembly. `chunks` accumulates the still-compressed wire
+  // bytes — D-RATS compresses a whole file once with zlib before chunking,
+  // blind to block boundaries, so individual chunks are not independently
+  // decompressable; `decodedData` holds the final inflated result, set once
+  // every chunk has arrived (see deliverInOrder).
   chunks: Uint8Array[]
+  decodedData: Uint8Array | null
   recvList: Set<number>
   outOfOrder: Map<number, Uint8Array>
   expectedSeq: number
@@ -44,6 +55,7 @@ export class FileTransferEngine {
   private activeTransfers = new Map<number, TransferState>()
   private onProgress: FileTransferProgressCallback | null = null
   private onOffer: FileOfferCallback | null = null
+  private onDrop: FileTransferDropCallback | null = null
   // Acks/replies can arrive before the code that's about to wait for them
   // gets a chance to register a waiter (the peer may process and respond to
   // a request within the same synchronous callback chain that sent it). Both
@@ -69,6 +81,7 @@ export class FileTransferEngine {
         phase: 'awaiting-offer',
         oseq: 0,
         chunks: [],
+        decodedData: null,
         recvList: new Set(),
         outOfOrder: new Map(),
         expectedSeq: 0,
@@ -85,10 +98,22 @@ export class FileTransferEngine {
     this.onOffer = cb
   }
 
+  // Fires when a decoded frame's session id doesn't match anything this
+  // engine is tracking — e.g. a peer addressing blocks with an id we never
+  // acked, or acking a session we've already torn down. Previously this was
+  // a silent no-op (console.warn only), which looked identical to "nothing
+  // arrived at all" from the UI.
+  setOnDrop(cb: FileTransferDropCallback): void {
+    this.onDrop = cb
+  }
+
   async handleIncoming(frame: DDT2Frame): Promise<void> {
     const { sessionId, type, seq } = frame.header
     const state = this.activeTransfers.get(sessionId)
-    if (!state) return
+    if (!state) {
+      this.onDrop?.(sessionId, frame.header.sourceStation, type)
+      return
+    }
 
     if (type === STATEFUL_TYPE_DAT) {
       state.recvList.add(seq)
@@ -101,6 +126,13 @@ export class FileTransferEngine {
         state.expectedSeq = (seq + 1) % 256
         state.phase = 'awaiting-accept'
         this.onOffer?.(state.filename, state.totalSize, sessionId, state.destStation)
+        // Matches the reference protocol exactly: file.py's recv_file() acks
+        // "OK" unconditionally for any offer on a newly negotiated session —
+        // there's no accept/reject gate in D-RATS at all, pulled or
+        // unsolicited. Replying immediately also avoids racing the sender's
+        // FILE_OFFER_RESPONSE_TIMEOUT_MS wait, which a manual UI click can't
+        // reliably beat.
+        await this.acceptOffer(sessionId)
         return
       }
 
@@ -115,7 +147,7 @@ export class FileTransferEngine {
       }
 
       if (state.phase !== 'transferring') return
-      this.deliverInOrder(state, seq, new Uint8Array(frame.data))
+      await this.deliverInOrder(state, seq, new Uint8Array(frame.data))
       return
     }
 
@@ -139,14 +171,26 @@ export class FileTransferEngine {
       const requested = Array.from(frame.data)
       const toAck = requested.filter((s) => state.recvList.has(s))
       const ackFrame: DDT2Frame = {
-        header: { ...frame.header, type: STATEFUL_TYPE_ACK, seq: 0, length: toAck.length },
+        header: {
+          ...frame.header,
+          type: STATEFUL_TYPE_ACK,
+          seq: 0,
+          length: toAck.length,
+          // frame.header is the incoming REQACK's header (source=them,
+          // dest=us) — spreading it as-is left our reply addressed to
+          // ourselves, since outgoing() only ever fixes sourceStation, not
+          // destStation. The peer never saw our ack and kept re-requesting
+          // it forever.
+          sourceStation: this.sessionManager.getStation(),
+          destStation: state.destStation,
+        },
         data: new Uint8Array(toAck),
       }
       await this.sessionManager.outgoing(ackFrame)
     }
   }
 
-  private deliverInOrder(state: TransferState, seq: number, data: Uint8Array): void {
+  private async deliverInOrder(state: TransferState, seq: number, data: Uint8Array): Promise<void> {
     if (seq !== state.expectedSeq) {
       state.outOfOrder.set(seq, data)
     } else {
@@ -163,12 +207,40 @@ export class FileTransferEngine {
       }
     }
 
-    this.onProgress?.(state.filename, Math.min(state.receivedBytes, state.totalSize), state.totalSize, state.sessionId)
-
+    // Finalize completion (inflate + phase) *before* reporting 100% progress
+    // — a caller watching for transferred>=total via onProgress must be able
+    // to safely call getCompletedData() as soon as it sees that, not race
+    // the still-pending inflate.
     if (state.receivedBytes >= state.totalSize) {
-      state.phase = 'complete'
+      // Every chunk is a blind byte-slice of one continuous zlib stream
+      // (see sendFile) — concatenate everything before inflating once, not
+      // per block, or the result is still-compressed garbage.
+      const compressed = new Uint8Array(state.receivedBytes)
+      let offset = 0
+      for (const chunk of state.chunks) {
+        compressed.set(chunk, offset)
+        offset += chunk.byteLength
+      }
+
+      try {
+        state.decodedData = await inflate(compressed)
+        state.phase = 'complete'
+      } catch (err) {
+        state.phase = 'failed'
+        console.error(`[FileTransfer] Failed to inflate received data for "${state.filename}":`, err)
+      }
       void this.sessionManager.endSession(state.sessionId)
     }
+
+    this.onProgress?.(state.filename, Math.min(state.receivedBytes, state.totalSize), state.totalSize, state.sessionId)
+  }
+
+  // A plain property comparison narrows `state.phase`'s literal type across
+  // the rest of the function for TS's control-flow analysis, which then
+  // flags a later identical comparison as "no overlap" — routing the check
+  // through a call sidesteps that without weakening the type anywhere else.
+  private isCancelled(state: TransferState): boolean {
+    return state.phase === 'failed'
   }
 
   private nextSeq(state: TransferState): number {
@@ -268,6 +340,10 @@ export class FileTransferEngine {
     let base = 0
 
     while (base < blocks.length) {
+      if (this.isCancelled(state)) {
+        throw new Error(`File transfer to ${state.destStation} was cancelled`)
+      }
+
       const windowEnd = Math.min(base + windowSize, blocks.length)
       const window = blocks.slice(base, windowEnd)
       this.pendingAcked.delete(state.sessionId)
@@ -278,6 +354,10 @@ export class FileTransferEngine {
 
       let attempt = 0
       for (;;) {
+        if (this.isCancelled(state)) {
+          throw new Error(`File transfer to ${state.destStation} was cancelled`)
+        }
+
         const pending = window.filter((b) => !acked.has(b.seq))
         if (pending.length === 0) break
 
@@ -286,7 +366,7 @@ export class FileTransferEngine {
         }
 
         await this.sendReqAck(state, pending.map((b) => b.seq))
-        const ackedNow = await this.waitForAckSeqs(state.sessionId, FILE_MIN_TIMEOUT_MS)
+        const ackedNow = await this.waitForAckSeqs(state.sessionId, FILE_MIN_TIMEOUT_MS * (attempt + 1))
         for (const s of ackedNow) acked.add(s)
         attempt++
       }
@@ -304,15 +384,22 @@ export class FileTransferEngine {
     const sessionId = await this.sessionManager.startSession(SESSION_TYPE_FILEXFER, dest, filename)
     onSessionId?.(sessionId)
 
+    // D-RATS compresses the whole file once with zlib, up front, then
+    // blindly slices the *compressed* stream into blocks — the offer's
+    // declared size and all windowed transport below operate on that
+    // compressed byte count, not the original file size.
+    const compressed = await deflate(data)
+
     const state: TransferState = {
       sessionId,
       destStation: dest,
       filename,
-      totalSize: data.byteLength,
+      totalSize: compressed.byteLength,
       direction: 'send',
       phase: 'awaiting-response',
       oseq: 0,
       chunks: [],
+      decodedData: null,
       recvList: new Set(),
       outOfOrder: new Map(),
       expectedSeq: 0,
@@ -322,16 +409,21 @@ export class FileTransferEngine {
 
     const filenameBytes = new TextEncoder().encode(filename)
     const offer = new Uint8Array(4 + filenameBytes.length)
-    new DataView(offer.buffer).setUint32(0, data.byteLength, true)
+    new DataView(offer.buffer).setUint32(0, compressed.byteLength, true)
     offer.set(filenameBytes, 4)
 
     await this.sendReliable(state, [offer])
 
     const response = await this.waitForData(sessionId, FILE_OFFER_RESPONSE_TIMEOUT_MS)
     if (!response) {
+      const cancelled = this.isCancelled(state)
       state.phase = 'failed'
       this.activeTransfers.delete(sessionId)
-      throw new Error(`File transfer to ${dest} failed: no response to offer (rejected or timed out)`)
+      throw new Error(
+        cancelled
+          ? `File transfer to ${dest} was cancelled`
+          : `File transfer to ${dest} failed: no response to offer (rejected or timed out)`,
+      )
     }
 
     const text = new TextDecoder().decode(response)
@@ -345,7 +437,7 @@ export class FileTransferEngine {
     }
     state.phase = 'transferring'
 
-    const remaining = data.slice(offset)
+    const remaining = compressed.slice(offset)
     const chunks: Uint8Array[] = []
     for (let i = 0; i < remaining.length; i += FILE_BLOCK_SIZE) {
       chunks.push(remaining.slice(i, i + FILE_BLOCK_SIZE))
@@ -354,7 +446,7 @@ export class FileTransferEngine {
     await this.sendReliable(state, chunks)
 
     state.phase = 'complete'
-    this.onProgress?.(filename, data.byteLength, data.byteLength, sessionId)
+    this.onProgress?.(filename, compressed.byteLength, compressed.byteLength, sessionId)
     await this.sessionManager.endSession(sessionId)
 
     return sessionId
@@ -371,16 +463,30 @@ export class FileTransferEngine {
     await this.sendReliable(state, [new TextEncoder().encode('OK')])
   }
 
-  rejectFile(sessionId: number): void {
+  // Cancels an in-progress transfer, either direction — e.g. a user-clicked
+  // Abort. sendReliable's retry loop checks for this phase so an outgoing
+  // transfer actually stops instead of continuing to retry against a
+  // session that's being torn down. Also wakes up anything blocked in
+  // waitForAckSeqs/waitForData right now, so cancelling takes effect
+  // immediately instead of waiting out whichever timeout happens to be in
+  // flight (up to FILE_OFFER_RESPONSE_TIMEOUT_MS = 20s otherwise).
+  cancelTransfer(sessionId: number): void {
     const state = this.activeTransfers.get(sessionId)
-    if (!state) return
+    if (!state || state.phase === 'complete' || state.phase === 'failed') return
 
-    // Only stop the app-level exchange (no OK/RESUME reply is ever sent, so
-    // the sender's wait for one will time out) — leave the transfer record
-    // in place so the offer block's own transport-level ack, which the
-    // sender is very likely still retrying for, keeps working regardless of
-    // this rejection.
     state.phase = 'failed'
+
+    const ackWaiter = this.ackWaiters.get(sessionId)
+    if (ackWaiter) {
+      this.ackWaiters.delete(sessionId)
+      ackWaiter()
+    }
+    const dataWaiter = this.dataWaiters.get(sessionId)
+    if (dataWaiter) {
+      this.dataWaiters.delete(sessionId)
+      dataWaiter()
+    }
+
     void this.sessionManager.endSession(sessionId)
   }
 
@@ -391,13 +497,6 @@ export class FileTransferEngine {
   getCompletedData(sessionId: number): Uint8Array | null {
     const state = this.activeTransfers.get(sessionId)
     if (!state || state.phase !== 'complete') return null
-
-    const result = new Uint8Array(state.receivedBytes)
-    let offset = 0
-    for (const chunk of state.chunks) {
-      result.set(chunk, offset)
-      offset += chunk.byteLength
-    }
-    return result
+    return state.decodedData
   }
 }

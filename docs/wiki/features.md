@@ -1,5 +1,13 @@
 # Features
 
+## What's Not Working
+
+- **File transfer over a real RF link** — pulling a file from a real D-RATS station has been confirmed working end-to-end. Pushing (uploading) a file to a real D-RATS station has not: in testing, the session negotiation succeeds but the offer/ack exchange afterward gets no response at all. Suspected cause is channel contention on a shared half-duplex RF link (no collision avoidance in the protocol), not yet confirmed — see [Troubleshooting](troubleshooting.md).
+- **Ratflector connections** — blocked under WSL2 by a localhost-proxy/WebSocket upgrade issue; not yet workable from a WSL2 dev environment.
+- **Email & Winlink** — D-RATS's email-over-Winlink-gateway feature is not implemented in this port at all.
+
+## Introduction
+
 What's implemented in D-RATS Web today, organized by tab.
 
 ## Chat

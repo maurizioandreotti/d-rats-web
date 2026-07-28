@@ -5,7 +5,6 @@ Browser-based D-RATS client for emergency ham radio communication. No backend se
 Built with React + TypeScript + Vite.
 
 ## Prerequisites
-
 - **Browser**: Chrome or Edge (required for Web Serial API support)
 - **Radio**: ICOM D-STAR radio with USB data dongle
 - **No internet required** after initial load — works fully offline as a PWA
@@ -19,6 +18,9 @@ npm run dev
 
 ## Build
 
+- download code in local folder,
+- open a terminal in the same folder
+- execute:
 ```bash
 npm run build
 npm run preview

@@ -69,7 +69,7 @@ export interface FileTransferItem {
   size: number
   transferred: number
   direction: 'send' | 'receive'
-  state: 'offer' | 'transferring' | 'complete' | 'error'
+  state: 'offer' | 'awaiting-response' | 'transferring' | 'complete' | 'error'
   station: string
   timestamp: number
 }

@@ -842,6 +842,34 @@
   flex-wrap: wrap;
 }
 
+.folder-path-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: var(--mono);
+  color: var(--text);
+  overflow: hidden;
+}
+
+.folder-path-label {
+  font-weight: 600;
+  color: var(--text-h);
+  flex-shrink: 0;
+}
+
+.folder-path {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text);
+}
+
 .file-pane-selectors {
   display: flex;
   gap: 6px;

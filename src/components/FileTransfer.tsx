@@ -141,9 +141,9 @@ export function FileTransfer({ fileRef, rpcRef }: FileTransferProps) {
             </div>
             <div className="transfer-state">
               {t.state}
-              {(t.state === 'transferring' || t.state === 'offer') && (
+              {(t.state === 'transferring' || t.state === 'offer' || t.state === 'awaiting-response') && (
                 <button className="btn btn-danger-outline btn-sm" onClick={() => handleAbort(t.id, t.sessionId)}>
-                  Abort
+                  Stop
                 </button>
               )}
               {t.state === 'complete' && t.direction === 'receive' && (

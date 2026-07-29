@@ -64,8 +64,12 @@ export function SharedFiles({ fileRef, station }: SharedFilesProps) {
       if (!data) throw new Error(`Could not read "${filename}" from the shared folder`)
 
       id = crypto.randomUUID()
+      // Create transfer with a placeholder sessionId; sendFile will update it via onSessionId callback
       addTransfer({ id, sessionId: -1, filename: filename!, size: data.byteLength, transferred: 0, direction: 'send', state: 'transferring', station, timestamp: Date.now() })
-      await fileRef.current.sendFile(filename!, data, station, (sessionId) => updateTransfer(id!, { sessionId }))
+      await fileRef.current.sendFile(filename!, data, station, (sessionId) => {
+        console.debug('[SharedFiles] sendFile onSessionId:', sessionId, 'for transfer', id)
+        updateTransfer(id!, { sessionId })
+      })
     } catch (err) {
       if (id) updateTransfer(id, { state: 'error', timestamp: Date.now() })
       useEventStore.getState().addEvent({
@@ -130,9 +134,16 @@ export function SharedFiles({ fileRef, station }: SharedFilesProps) {
           </button>
         </div>
       </div>
+      {folderName && (
+        <div className="folder-path-row">
+          <span className="folder-path-label">Folder:</span>
+          <span className="folder-path" title={folderName}>{folderName}</span>
+          <button className="btn btn-xs btn-secondary" onClick={() => navigator.clipboard.writeText(folderName)} title="Copy path">
+            Copy
+          </button>
+        </div>
+      )}
       <p className="help-text">
-        Folder: {folderName}
-        {' — '}
         <button className="btn-link" onClick={() => addInputRef.current?.click()}>+ Add file to folder</button>
         <input ref={addInputRef} type="file" multiple hidden onChange={handleAdd} />
       </p>

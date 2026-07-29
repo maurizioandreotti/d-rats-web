@@ -3,7 +3,7 @@ import type { PortConfig } from '../types'
 import { SessionManager } from '../engine/session-mgr'
 import { ChatEngine } from '../engine/chat'
 import { FileTransferEngine } from '../engine/file'
-import { RPCEngine, formatFileListInfo } from '../engine/rpc'
+import { RPCEngine, formatFileListInfo, JOB_FILE_LIST } from '../engine/rpc'
 import { isValidCallsign } from '../engine/callsign'
 import { parseGps } from '../engine/gps'
 import { TransportManager } from '../engine/transport-manager'
@@ -207,6 +207,36 @@ export function useDratsEngine() {
         return readFolderFile(handle, name)
       },
       remove: (name) => useLocalFilesStore.getState().removeFile(name),
+    })
+    rpc.setOnPullSend((filename, size, station) => {
+      const id = crypto.randomUUID()
+      addTransfer({ id, sessionId: -1, filename, size, transferred: 0, direction: 'send', state: 'transferring', station, timestamp: Date.now() })
+      return (sessionId) => updateTransfer(id, { sessionId })
+    })
+    rpc.setOnPullSendError((filename, station, err) => {
+      useEventStore.getState().addEvent({
+        time: Date.now(),
+        text: `[File] Send of "${filename}" to ${station} (triggered by their pull) failed: ${err instanceof Error ? err.message : String(err)}`,
+        type: 'frame',
+      })
+    })
+    rpc.setOnJobServed((jobType, requester, reply) => {
+      const summary =
+        jobType === JOB_FILE_LIST
+          ? `${Object.keys(reply).length} file(s): ${Object.keys(reply).join(', ') || '(none)'}`
+          : (reply.rc ?? JSON.stringify(reply))
+      useEventStore.getState().addEvent({
+        time: Date.now(),
+        text: `[RPC] Served "${jobType}" for ${requester} → ${summary}`,
+        type: 'frame',
+      })
+    })
+    rpc.setOnJobError((jobType, requester, err) => {
+      useEventStore.getState().addEvent({
+        time: Date.now(),
+        text: `[RPC] Failed to answer "${jobType}" from ${requester}: ${err instanceof Error ? err.message : String(err)}`,
+        type: 'frame',
+      })
     })
     rpcRef.current = rpc
 

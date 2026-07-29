@@ -77,12 +77,46 @@ interface PendingCall {
   timeout: ReturnType<typeof setTimeout>
 }
 
+// Fired synchronously, right before a pull-triggered send starts, so the UI
+// layer can create a Transfers-list entry the same way a manual Upload
+// click does. Returns a callback that receives the real session id once
+// the underlying FileTransferEngine.sendFile() negotiates it.
+export type PullTriggeredSendCallback = (
+  filename: string,
+  size: number,
+  station: string,
+) => (sessionId: number) => void
+
+// Fired if the pull-triggered send itself fails (e.g. the peer never acks
+// the offer) — sendFile() is otherwise fire-and-forget from handleJob's
+// perspective, which was silently swallowing errors with no trace anywhere.
+export type PullSendErrorCallback = (filename: string, station: string, error: unknown) => void
+
+// Fires for every inbound job we serve, with the reply we're about to send.
+// Serving a request is otherwise completely silent from the UI's side: the
+// only visible trace is the generic incoming/outgoing frame lines, which say
+// nothing about whether the peer got a usable answer.
+export type JobServedCallback = (
+  jobType: string,
+  requester: string,
+  reply: Record<string, string>,
+) => void
+
+// Fires when serving a job throws, or when the reply itself fails to go out.
+// Both used to propagate as an unhandled rejection out of handleIncoming()
+// (nothing above it catches), so the peer just saw silence.
+export type JobErrorCallback = (jobType: string, requester: string, error: unknown) => void
+
 export class RPCEngine {
   private sessionManager: SessionManager
   private fileTransfer: FileTransferEngine | null = null
   private fileProvider: FileProvider | null = null
   private pullGate: (() => boolean) | null = null
   private deletePassword: (() => string) | null = null
+  private onPullSend: PullTriggeredSendCallback | null = null
+  private onPullSendError: PullSendErrorCallback | null = null
+  private onJobServed: JobServedCallback | null = null
+  private onJobError: JobErrorCallback | null = null
   private pendingCalls = new Map<number, PendingCall>()
   private nextIdent = 0
 
@@ -113,6 +147,22 @@ export class RPCEngine {
     this.deletePassword = getPassword
   }
 
+  setOnPullSend(cb: PullTriggeredSendCallback): void {
+    this.onPullSend = cb
+  }
+
+  setOnPullSendError(cb: PullSendErrorCallback): void {
+    this.onPullSendError = cb
+  }
+
+  setOnJobServed(cb: JobServedCallback): void {
+    this.onJobServed = cb
+  }
+
+  setOnJobError(cb: JobErrorCallback): void {
+    this.onJobError = cb
+  }
+
   async handleIncoming(frame: DDT2Frame): Promise<void> {
     const { type, seq, sourceStation } = frame.header
     const text = new TextDecoder().decode(frame.data)
@@ -132,10 +182,25 @@ export class RPCEngine {
 
       const jobType = text.slice(0, groupIdx)
       const args = decodeDict(text.slice(groupIdx + 1))
-      const result = await this.handleJob(jobType, args, sourceStation)
-      if (!result) return
 
-      await this.sendRaw(sourceStation, RPC_TYPE_ACK, seq, encodeDict(result))
+      let result: Record<string, string> | null
+      try {
+        result = await this.handleJob(jobType, args, sourceStation)
+      } catch (err) {
+        this.onJobError?.(jobType, sourceStation, err)
+        return
+      }
+      if (!result) {
+        this.onJobError?.(jobType, sourceStation, new Error('Unsupported job type — no reply sent'))
+        return
+      }
+
+      this.onJobServed?.(jobType, sourceStation, result)
+      try {
+        await this.sendRaw(sourceStation, RPC_TYPE_ACK, seq, encodeDict(result))
+      } catch (err) {
+        this.onJobError?.(jobType, sourceStation, err)
+      }
     }
   }
 
@@ -160,8 +225,15 @@ export class RPCEngine {
       if (!this.fileTransfer) return { rc: 'Remote file transfers not enabled' }
 
       // Fire-and-forget: the requester gets "OK" now and the bytes arrive
-      // moments later as an ordinary incoming file offer.
-      void this.fileTransfer.sendFile(filename, data, requester)
+      // moments later as an ordinary incoming file offer. Still fire-and-
+      // forget from the RPC exchange's perspective, but give the UI layer
+      // a chance to track it (onPullSend) and surface a failure
+      // (onPullSendError) instead of both being silently invisible.
+      const fileTransfer = this.fileTransfer
+      const onSessionId = this.onPullSend?.(filename, data.byteLength, requester)
+      fileTransfer.sendFile(filename, data, requester, onSessionId).catch((err) => {
+        this.onPullSendError?.(filename, requester, err)
+      })
       return { rc: 'OK' }
     }
 

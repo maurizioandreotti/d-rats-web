@@ -70,6 +70,39 @@ describe('file transfer end-to-end (control handshake + windowed ACK)', () => {
     expect(stationA.fileTransfer.getTransfer(sessionId)?.phase).toBe('complete')
   }, 15000)
 
+  it('reports incremental progress while sending, not just a single jump to 100%', async () => {
+    const stationA = makeLinkedStation('W1EEE')
+    const stationB = makeLinkedStation('W1FFF')
+    link(stationA, stationB)
+
+    stationB.fileTransfer.setOnOffer(() => {})
+
+    // Genuinely random (not just permuted-but-cyclical) so deflate can't
+    // collapse it into a single transport window (4 blocks * 1024 bytes) —
+    // a repeating byte pattern compresses so well it fits in one window
+    // regardless of whether the fix works, masking the bug this guards.
+    const original = new Uint8Array(20000)
+    crypto.getRandomValues(original)
+
+    const senderProgress: number[] = []
+    stationA.fileTransfer.setOnProgress((_filename, transferred) => {
+      senderProgress.push(transferred)
+    })
+
+    await stationA.fileTransfer.sendFile('big.bin', original, 'W1FFF')
+
+    // At least one progress report strictly before the final 100% one —
+    // proof it's incremental, not a single end-of-transfer jump.
+    expect(senderProgress.length).toBeGreaterThan(1)
+    const finalValue = senderProgress[senderProgress.length - 1]!
+    expect(senderProgress.slice(0, -1).some((v) => v < finalValue)).toBe(true)
+    // Progress must never decrease and never exceed the final total.
+    for (let i = 1; i < senderProgress.length; i++) {
+      expect(senderProgress[i]!).toBeGreaterThanOrEqual(senderProgress[i - 1]!)
+      expect(senderProgress[i]!).toBeLessThanOrEqual(finalValue)
+    }
+  }, 15000)
+
   it('cancelling as soon as the offer arrives prevents delivery', async () => {
     const stationA = makeLinkedStation('W1CCC')
     const stationB = makeLinkedStation('W1DDD')

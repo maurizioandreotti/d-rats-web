@@ -20,6 +20,7 @@ export type IncomingSessionCallback = (
   sourceStation: string,
   name: string,
 ) => void
+export type RpcFrameCallback = (frame: DDT2Frame) => Promise<void>
 
 interface SessionRecord {
   localId: number
@@ -52,11 +53,34 @@ export class SessionManager {
   // sessions (e.g. file transfer) start allocating from 3.
   private nextSessionId = 3
 
+  // Configurable retry timing (for testing)
+  private newSessionRetries = NEW_SESSION_RETRIES
+  private newSessionRetryMsFirst = NEW_SESSION_RETRY_MS_FIRST
+  private newSessionRetryMsRest = NEW_SESSION_RETRY_MS_REST
+  private endSessionRetries = END_SESSION_RETRIES
+  private endSessionRetryMs = END_SESSION_RETRY_MS
+
+  setRetryTiming(opts: {
+    newSessionRetries?: number
+    newSessionRetryMsFirst?: number
+    newSessionRetryMsRest?: number
+    endSessionRetries?: number
+    endSessionRetryMs?: number
+  }): void {
+    if (opts.newSessionRetries !== undefined) this.newSessionRetries = opts.newSessionRetries
+    if (opts.newSessionRetryMsFirst !== undefined) this.newSessionRetryMsFirst = opts.newSessionRetryMsFirst
+    if (opts.newSessionRetryMsRest !== undefined) this.newSessionRetryMsRest = opts.newSessionRetryMsRest
+    if (opts.endSessionRetries !== undefined) this.endSessionRetries = opts.endSessionRetries
+    if (opts.endSessionRetryMs !== undefined) this.endSessionRetryMs = opts.endSessionRetryMs
+  }
+
   private pendingAcks = new Map<number, (peerId: number) => void>()
   private pendingEnds = new Map<number, () => void>()
   private onIncomingSession: IncomingSessionCallback | null = null
-  private onOutgoing: ((frame: DDT2Frame) => void) | null = null
+  private onRpcFrame: RpcFrameCallback | null = null
+  private onOutgoing: ((frame: DDT2Frame, portName?: string) => void) | null = null
   private onMissingRemoteId: ((localId: number, hasRecord: boolean) => void) | null = null
+  private isPortConnected: ((portName: string) => boolean) | null = null
 
   setOutgoingCallback(cb: FrameCallback): void {
     this.outgoingCallback = cb
@@ -65,8 +89,16 @@ export class SessionManager {
   // Fires for every frame actually sent, after id/station rewriting — the
   // only way to observe what this station transmits, since Transport's
   // onFrame callback only ever fires for received frames.
-  setOnOutgoing(cb: (frame: DDT2Frame) => void): void {
+  setOnOutgoing(cb: (frame: DDT2Frame, portName?: string) => void): void {
     this.onOutgoing = cb
+  }
+
+  // Lets outgoing() check a remembered port is still usable before routing a
+  // reply to it. Without this, a station heard on a port that has since been
+  // disconnected makes TransportManager.sendFrame() throw instead of falling
+  // back to a connected port, and the reply is dropped with no trace.
+  setIsPortConnected(cb: (portName: string) => boolean): void {
+    this.isPortConnected = cb
   }
 
   // Diagnostic: fires if we're about to send on a negotiated session for
@@ -75,6 +107,11 @@ export class SessionManager {
   // peer if it happens to have picked the same number independently.
   setOnMissingRemoteId(cb: (localId: number, hasRecord: boolean) => void): void {
     this.onMissingRemoteId = cb
+  }
+
+  // Incoming RPC frames (negotiated session ID, not fixed 2)
+  setOnRpcFrame(cb: RpcFrameCallback): void {
+    this.onRpcFrame = cb
   }
 
   setStation(callsign: string): void {
@@ -107,6 +144,20 @@ export class SessionManager {
 
     if (sessionId === SESSION_CONTROL) {
       this.handleControlFrame(frame)
+    } else if (this.onRpcFrame) {
+      // Negotiated RPC session: route to RPCEngine
+      // Check if this sessionId belongs to an open RPC session for this source
+      for (const record of this.sessions.values()) {
+        if (
+          record.sessionType === 7 &&
+          record.remoteId === sessionId &&
+          record.destStation === sourceStation &&
+          record.state === 'open'
+        ) {
+          await this.onRpcFrame(frame)
+          return
+        }
+      }
     }
   }
 
@@ -214,8 +265,29 @@ export class SessionManager {
       frame.header.destStation = 'CQCQCQ'
     }
 
+    // Replies (RPC acks, file-transfer ACK/REQACK/DAT, control-channel
+    // acks) are constructed without ever knowing which port the original
+    // request arrived on — chat.ts/file.ts/rpc.ts all just call outgoing()
+    // with no portName. Without this, TransportManager.sendFrame() falls
+    // back to "first connected port", which silently sends the reply out
+    // the wrong port whenever more than one is connected, and the
+    // requester never sees it. heardOnPort() already records which port
+    // every station was last heard on — use it here instead of threading
+    // a portName parameter through every call site. A remembered port that
+    // is no longer connected is ignored rather than used: sendFrame() throws
+    // on an unknown port name, so trusting a stale entry would silently drop
+    // the reply instead of sending it out a port that still works.
+    let resolvedPort = portName
+    if (!resolvedPort) {
+      const remembered = this.stationPorts.get(frame.header.destStation)
+      if (remembered && (this.isPortConnected?.(remembered) ?? true)) {
+        resolvedPort = remembered
+      }
+    }
+
     // Sessions negotiated over the control channel are addressed on the wire
     // using the *peer's* chosen id for the session, not our own local id.
+    // SESSION_RPC (fixed slot 2) is never negotiated, so it's also excluded.
     if (
       frame.header.sessionId !== SESSION_CONTROL &&
       frame.header.sessionId !== SESSION_CHAT &&
@@ -230,8 +302,8 @@ export class SessionManager {
       }
     }
 
-    this.onOutgoing?.(frame)
-    await this.outgoingCallback(frame, portName)
+    this.onOutgoing?.(frame, resolvedPort)
+    await this.outgoingCallback(frame, resolvedPort)
   }
 
   // Negotiates a new stateful session with `destStation` over the control
@@ -249,8 +321,8 @@ export class SessionManager {
       state: 'sync',
     })
 
-    for (let attempt = 0; attempt < NEW_SESSION_RETRIES; attempt++) {
-      const waitMs = attempt === 0 ? NEW_SESSION_RETRY_MS_FIRST : NEW_SESSION_RETRY_MS_REST
+    for (let attempt = 0; attempt < this.newSessionRetries; attempt++) {
+      const waitMs = attempt === 0 ? this.newSessionRetryMsFirst : this.newSessionRetryMsRest
       const peerId = await new Promise<number | null>((resolve) => {
         this.pendingAcks.set(localId, resolve)
         void this.sendControlFrame(
@@ -279,7 +351,7 @@ export class SessionManager {
 
     const targetId = record.remoteId ?? localId
 
-    for (let attempt = 0; attempt < END_SESSION_RETRIES; attempt++) {
+    for (let attempt = 0; attempt < this.endSessionRetries; attempt++) {
       const closed = await new Promise<boolean>((resolve) => {
         this.pendingEnds.set(localId, () => resolve(true))
         void this.sendControlFrame(record.destStation, CONTROL_TYPE_END, encodeSessionEnd(targetId))
@@ -288,7 +360,7 @@ export class SessionManager {
             this.pendingEnds.delete(localId)
             resolve(false)
           }
-        }, END_SESSION_RETRY_MS)
+        }, this.endSessionRetryMs)
       })
       if (closed) break
     }

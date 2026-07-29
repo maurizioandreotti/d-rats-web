@@ -3,7 +3,7 @@ import type { PortConfig } from '../types'
 import { SessionManager } from '../engine/session-mgr'
 import { ChatEngine } from '../engine/chat'
 import { FileTransferEngine } from '../engine/file'
-import { RPCEngine } from '../engine/rpc'
+import { RPCEngine, formatFileListInfo } from '../engine/rpc'
 import { isValidCallsign } from '../engine/callsign'
 import { parseGps } from '../engine/gps'
 import { TransportManager } from '../engine/transport-manager'
@@ -16,7 +16,6 @@ import { useLocalFilesStore } from '../store/local-files-store'
 import { readFolderFile } from '../engine/local-files'
 import { useConfigStore } from '../store/config-store'
 import { useEventStore } from '../store/event-store'
-import { formatFileSize } from '../utils/format'
 import type { DDT2Frame } from '../types'
 import { StationStatus } from '../types'
 
@@ -103,14 +102,15 @@ export function useDratsEngine() {
 
     const sessionMgr = new SessionManager()
     sessionMgr.setStation(config.myCallsign || 'N0CALL')
-    sessionMgr.setOnOutgoing((frame) => {
+    sessionMgr.setOnOutgoing((frame, portName) => {
       if (frame.header.sessionId === SESSION_CONTROL) return
       useEventStore.getState().addEvent({
         time: Date.now(),
-        text: `[Frame] → session=${frame.header.sessionId} type=${frame.header.type} seq=${frame.header.seq} ${frame.header.sourceStation} → ${frame.header.destStation}`,
+        text: `[Frame] → session=${frame.header.sessionId} type=${frame.header.type} seq=${frame.header.seq} ${frame.header.sourceStation} → ${frame.header.destStation} via ${portName ?? 'first connected port'}`,
         type: 'frame',
       })
     })
+    sessionMgr.setIsPortConnected((portName) => transportMgr.isPortConnected(portName))
     sessionMgr.setOnMissingRemoteId((localId, hasRecord) => {
       useEventStore.getState().addEvent({
         time: Date.now(),
@@ -178,11 +178,29 @@ export function useDratsEngine() {
     rpc.setPullGate(() => useConfigStore.getState().config.allowRemoteFileTransfers)
     rpc.setDeletePassword(() => useConfigStore.getState().config.remoteDeletePassword)
     rpc.setFileProvider({
-      list: async () =>
-        useLocalFilesStore.getState().files.map((f) => ({
+      list: async () => {
+        const { files, handle, permission } = useLocalFilesStore.getState()
+        // After a reload the stored folder handle comes back needing a fresh
+        // user gesture to re-grant, so `files` is empty until the user clicks
+        // reconnect — and we'd answer a peer's list request with an empty
+        // dict, which real D-RATS shows as a failed connect rather than an
+        // empty folder. Say so in the log instead of leaving it a mystery.
+        if (files.length === 0) {
+          useEventStore.getState().addEvent({
+            time: Date.now(),
+            text: !handle
+              ? '[RPC] File list requested but no shared folder is selected — replying with an empty list'
+              : permission !== 'granted'
+                ? `[RPC] File list requested but the shared folder needs permission re-granted (click Reconnect in the Files tab) — replying with an empty list`
+                : '[RPC] File list requested and the shared folder is empty — replying with an empty list',
+            type: 'frame',
+          })
+        }
+        return files.map((f) => ({
           name: f.name,
-          info: `${formatFileSize(f.size)} (${new Date(f.lastModified).toLocaleString()})`,
-        })),
+          info: formatFileListInfo(f.size, f.lastModified),
+        }))
+      },
       get: async (name) => {
         const { handle } = useLocalFilesStore.getState()
         if (!handle) return null

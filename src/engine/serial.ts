@@ -191,7 +191,22 @@ export class RadioSerial {
     this.port = null
   }
 
-  async send(data: Uint8Array): Promise<void> {
+  // Serializes all send() calls onto a single queue. Without this, two
+  // frames sent around the same time (e.g. a position-ping reply firing
+  // while a file-transfer ACK is also going out) would both be mid-flight
+  // in sendNow()'s chunked write loop at once — their 8-byte chunks
+  // interleave on the wire since they share one writer, corrupting both
+  // frames. Chaining through .catch(() => {}) lets a failed send still
+  // reject for its own caller without wedging the queue for the next one.
+  private sendQueue: Promise<void> = Promise.resolve()
+
+  send(data: Uint8Array): Promise<void> {
+    const run = this.sendQueue.then(() => this.sendNow(data))
+    this.sendQueue = run.catch(() => {})
+    return run
+  }
+
+  private async sendNow(data: Uint8Array): Promise<void> {
     if (!this.writer || this.closed) {
       console.error('[RadioSerial] send() failed: not connected')
       throw new Error('Serial port not connected')
@@ -199,6 +214,11 @@ export class RadioSerial {
 
     console.log('[RadioSerial] send() called with', data.length, 'bytes')
     const chunk = 8
+    // One XOFF budget for the whole frame, not per chunk. Per-chunk it was
+    // xoffTimeoutMs *times the chunk count* — a 1KB frame could sit here for
+    // half an hour — and since send() now queues, that stalls every other
+    // frame behind it (RPC replies included) long past any peer's timeout.
+    const xoffDeadline = Date.now() + this.xoffTimeoutMs
     for (let pos = 0; pos < data.length; pos += chunk) {
       const end = Math.min(pos + chunk, data.length)
       const slice = data.subarray(pos, end)
@@ -212,9 +232,9 @@ export class RadioSerial {
         throw err
       }
 
-      const waitStart = Date.now()
       while (!this.xonState) {
-        if (Date.now() - waitStart > this.xoffTimeoutMs) {
+        if (Date.now() > xoffDeadline) {
+          console.warn('[RadioSerial] XOFF budget exhausted, resuming send anyway')
           this.xonState = true
           break
         }

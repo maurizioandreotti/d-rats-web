@@ -29,6 +29,30 @@ export interface FileProvider {
   remove(name: string): Promise<boolean>
 }
 
+// Matches D-RATS's rpc_file_list exactly (rpc.py): integer bytes, or KB via
+// a truncating right-shift with no further MB scaling (D-RATS never shows
+// MB, however large the file), plus a "YYYY-MM-DD HH:MM:SS" timestamp —
+// e.g. "512 B (2024-05-01 10:22:31)". This isn't cosmetic: the reference
+// UI (main_files.py) unpacks this value with a strict, unguarded
+// `size_str, units, file_date, file_time = value.split(" ")` expecting
+// exactly 4 space-separated tokens. A locale-formatted date (extra comma,
+// AM/PM) or a decimal size produces a different token count and throws
+// "too many values to unpack" on the real peer, uncaught.
+export function formatFileListInfo(sizeBytes: number, mtimeMs: number): string {
+  let size = Math.floor(sizeBytes)
+  let units = 'B'
+  if (size >= 1024) {
+    size = Math.floor(size / 1024)
+    units = 'KB'
+  }
+
+  const d = new Date(mtimeMs)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const timeString = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+
+  return `${size} ${units} (${timeString})`
+}
+
 export function encodeDict(fields: Record<string, string>): string {
   return Object.entries(fields)
     .map(([key, value]) => `${key}${UNIT_SEPARATOR}${value}`)

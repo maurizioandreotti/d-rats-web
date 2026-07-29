@@ -61,14 +61,24 @@ export function FileTransfer({ fileRef, rpcRef }: FileTransferProps) {
       const data = fileRef.current?.getCompletedData(sessionId)
       if (!data) return
 
-      const { handle, addFile } = useLocalFilesStore.getState()
+      const { handle, files, addFile } = useLocalFilesStore.getState()
       if (handle) {
+        const exists = files.some((f) => f.name === filename)
+        if (exists && !window.confirm(`"${filename}" already exists in the shared folder. Overwrite it?`)) {
+          useEventStore.getState().addEvent({
+            time: Date.now(),
+            text: `[File] Save of "${filename}" skipped — already exists in the shared folder`,
+            type: 'frame',
+          })
+          return
+        }
+
         // Save alongside the shared files, same as D-RATS's download_dir —
         // not the browser's generic Downloads folder.
         await addFile(filename, data)
         useEventStore.getState().addEvent({
           time: Date.now(),
-          text: `[File] Saved "${filename}" to the shared folder`,
+          text: `[File] Saved "${filename}" to the shared folder${exists ? ' (overwritten)' : ''}`,
           type: 'frame',
         })
         return

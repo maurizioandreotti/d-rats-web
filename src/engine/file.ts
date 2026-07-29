@@ -333,11 +333,20 @@ export class FileTransferEngine {
   // FILE_MAX_RETRIES times. Mirrors the wire behavior of D-RATS's stateful
   // session (mod-256 block numbers, REQACK-driven ack, 4KB hard window cap)
   // without reproducing its adaptive-rate timeout heuristics exactly.
-  private async sendReliable(state: TransferState, chunks: Uint8Array[]): Promise<void> {
+  // `onWindowSent`, if given, fires once a window is fully acked with the
+  // cumulative bytes sent so far in *this* call — used to report real
+  // incremental progress while sending, instead of a single jump to 100%
+  // once the whole (possibly multi-minute, over real RF) send completes.
+  private async sendReliable(
+    state: TransferState,
+    chunks: Uint8Array[],
+    onWindowSent?: (sentBytes: number) => void,
+  ): Promise<void> {
     const blocks = chunks.map((data) => ({ seq: this.nextSeq(state), data }))
     const windowSize = Math.max(2, Math.min(FILE_WINDOW_SIZE, Math.floor(4096 / FILE_BLOCK_SIZE)))
     const acked = new Set<number>()
     let base = 0
+    let sentBytes = 0
 
     while (base < blocks.length) {
       if (this.isCancelled(state)) {
@@ -372,6 +381,8 @@ export class FileTransferEngine {
       }
 
       base = windowEnd
+      sentBytes += window.reduce((sum, b) => sum + b.data.byteLength, 0)
+      onWindowSent?.(sentBytes)
     }
   }
 
@@ -443,7 +454,9 @@ export class FileTransferEngine {
       chunks.push(remaining.slice(i, i + FILE_BLOCK_SIZE))
     }
 
-    await this.sendReliable(state, chunks)
+    await this.sendReliable(state, chunks, (sentBytes) => {
+      this.onProgress?.(filename, Math.min(offset + sentBytes, compressed.byteLength), compressed.byteLength, sessionId)
+    })
 
     state.phase = 'complete'
     this.onProgress?.(filename, compressed.byteLength, compressed.byteLength, sessionId)

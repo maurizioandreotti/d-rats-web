@@ -226,6 +226,10 @@ export class TransportManager {
     this.ratflectorTransports.clear()
   }
 
+  isPortConnected(portName: string): boolean {
+    return this.serialTransports.has(portName) || this.ratflectorTransports.has(portName)
+  }
+
   async sendFrame(frame: DDT2Frame, portName?: string): Promise<void> {
     if (portName) {
       const st = this.serialTransports.get(portName)

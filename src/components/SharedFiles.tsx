@@ -136,9 +136,12 @@ export function SharedFiles({ fileRef, station }: SharedFilesProps) {
       </div>
       {folderName && (
         <div className="folder-path-row">
-          <span className="folder-path-label">Folder:</span>
-          <span className="folder-path" title={folderName}>{folderName}</span>
-          <button className="btn btn-xs btn-secondary" onClick={() => navigator.clipboard.writeText(folderName)} title="Copy path">
+          <span className="folder-path-label">Shared folder:</span>
+          <span className="folder-path" title="Browser security prevents access to the full absolute path">
+            {folderName}
+            <span className="path-note"> (full path hidden by browser)</span>
+          </span>
+          <button className="btn btn-xs btn-secondary" onClick={() => navigator.clipboard.writeText(folderName)} title="Copy folder name">
             Copy
           </button>
         </div>

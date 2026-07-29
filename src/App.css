@@ -870,6 +870,12 @@
   color: var(--text);
 }
 
+.folder-path-copy {
+  flex-shrink: 0;
+  font-size: 11px;
+  padding: 2px 8px;
+}
+
 .file-pane-selectors {
   display: flex;
   gap: 6px;

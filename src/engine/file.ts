@@ -473,7 +473,10 @@ export class FileTransferEngine {
   // state across sessions), so this always replies "OK".
   async acceptOffer(sessionId: number): Promise<void> {
     const state = this.activeTransfers.get(sessionId)
-    if (!state || state.phase !== 'awaiting-accept') return
+    // Accept both 'awaiting-offer' (offer just arrived, auto-ack) and
+    // 'awaiting-accept' (manual accept via UI) — the reference D-RATS
+    // auto-acks every offer immediately without user interaction.
+    if (!state || (state.phase !== 'awaiting-offer' && state.phase !== 'awaiting-accept')) return
 
     state.phase = 'transferring'
     await this.sendReliable(state, [new TextEncoder().encode('OK')])

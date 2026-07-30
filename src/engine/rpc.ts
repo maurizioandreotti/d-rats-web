@@ -85,7 +85,7 @@ export type PullTriggeredSendCallback = (
   filename: string,
   size: number,
   station: string,
-) => (sessionId: number) => void
+) => (sessionId: number, compressedSize?: number) => void
 
 // Fired if the pull-triggered send itself fails (e.g. the peer never acks
 // the offer) — sendFile() is otherwise fire-and-forget from handleJob's

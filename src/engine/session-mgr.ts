@@ -4,6 +4,7 @@ import {
   CONTROL_TYPE_ACK,
   CONTROL_TYPE_END,
   CONTROL_TYPE_NEW_BASE,
+  SESSION_TYPE_RPC,
   newSessionControlType,
   encodeNewSessionRequest,
   decodeNewSessionRequest,
@@ -149,7 +150,7 @@ export class SessionManager {
       // Check if this sessionId belongs to an open RPC session for this source
       for (const record of this.sessions.values()) {
         if (
-          record.sessionType === 7 &&
+            record.sessionType === SESSION_TYPE_RPC &&
           record.remoteId === sessionId &&
           record.destStation === sourceStation &&
           record.state === 'open'
@@ -370,6 +371,20 @@ export class SessionManager {
 
   getSessionDest(localId: number): string | undefined {
     return this.sessions.get(localId)?.destStation
+  }
+
+  // Find a session whose remoteId matches — used for routing incoming frames
+  // where the peer's chosen session ID may collide with fixed IDs like
+  // SESSION_POSITION (7). Pass sourceStation to narrow the search to sessions
+  // involving that specific station, avoiding cross-talk when the same remote
+  // ID happens to be used in sessions with different peers.
+  getSessionByRemoteId(remoteId: number, sourceStation?: string): SessionRecord | undefined {
+    for (const record of this.sessions.values()) {
+      if (record.remoteId === remoteId && (!sourceStation || record.destStation === sourceStation)) {
+        return record
+      }
+    }
+    return undefined
   }
 
   getHeardStations(): Map<string, number> {

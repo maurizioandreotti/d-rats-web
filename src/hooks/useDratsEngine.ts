@@ -8,6 +8,7 @@ import { isValidCallsign } from '../engine/callsign'
 import { parseGps } from '../engine/gps'
 import { TransportManager } from '../engine/transport-manager'
 import { SESSION_CONTROL, SESSION_CHAT, SESSION_RPC, SESSION_POSITION } from '../engine/ddt2'
+import { SESSION_TYPE_FILEXFER } from '../engine/control'
 import { useChatStore } from '../store/chat-store'
 import { usePingStore } from '../store/ping-store'
 import { useStationStore } from '../store/station-store'
@@ -54,19 +55,39 @@ export function useDratsEngine() {
       const { sessionId } = frame.header
       if (sessionId === SESSION_CONTROL) return
 
+      // The peer's negotiated session ID may collide with our fixed IDs (e.g.
+      // SESSION_POSITION=7, or even SESSION_CHAT=1 / SESSION_RPC=2 in rare
+      // cases). Look up the session manager for any negotiated session whose
+      // remoteId matches, and if found, rewrite the frame's sessionId to our
+      // local ID so the target engine can find the transfer in its bookkeeping.
+      const negotiatedSession = sessionMgrRef.current?.getSessionByRemoteId(sessionId, frame.header.sourceStation)
+      const effectiveSessionId = negotiatedSession?.localId ?? sessionId
+      const routeFrame = effectiveSessionId !== sessionId
+        ? { ...frame, header: { ...frame.header, sessionId: effectiveSessionId } }
+        : frame
+
       const direction = frame.header.sourceStation !== config.myCallsign ? 'incoming' : 'outgoing'
 
       useEventStore.getState().addEvent({
         time: Date.now(),
-        text: `[Frame] ${direction === 'incoming' ? '←' : '→'} session=${sessionId} type=${frame.header.type} seq=${frame.header.seq} ${frame.header.sourceStation} → ${frame.header.destStation}`,
+        text: `[Frame] ${direction === 'incoming' ? '←' : '→'} session=${sessionId}${effectiveSessionId !== sessionId ? '→' + effectiveSessionId : ''} type=${frame.header.type} seq=${frame.header.seq} ${frame.header.sourceStation} → ${frame.header.destStation}`,
         type: 'frame',
       })
 
-      if (sessionId === SESSION_CHAT) {
-        await chatRef.current?.handleIncoming(frame)
-      } else if (sessionId === SESSION_RPC) {
-        await rpcRef.current?.handleIncoming(frame)
-      } else if (sessionId === SESSION_POSITION) {
+      // Log routing decision for incoming non-control frames
+      if (direction === 'incoming') {
+        const routeTo = effectiveSessionId === SESSION_CHAT ? 'chat'
+          : effectiveSessionId === SESSION_RPC ? 'rpc'
+          : effectiveSessionId === SESSION_POSITION ? 'position'
+          : 'xfer'
+        console.log('[route] session=' + sessionId + (effectiveSessionId !== sessionId ? '→' + effectiveSessionId : '') + ' type=' + frame.header.type + ' seq=' + frame.header.seq + ' src=' + frame.header.sourceStation + ' → ' + routeTo)
+      }
+
+      if (effectiveSessionId === SESSION_CHAT) {
+        await chatRef.current?.handleIncoming(routeFrame)
+      } else if (effectiveSessionId === SESSION_RPC) {
+        await rpcRef.current?.handleIncoming(routeFrame)
+      } else if (effectiveSessionId === SESSION_POSITION) {
         const text = new TextDecoder().decode(frame.data)
         if (text === 'position?') {
           usePingStore.getState().addPing({
@@ -88,7 +109,7 @@ export function useDratsEngine() {
           })
         }
       } else {
-        await fileRef.current?.handleIncoming(frame)
+        await fileRef.current?.handleIncoming(routeFrame)
       }
     },
     [config.myCallsign],
@@ -160,8 +181,10 @@ export function useDratsEngine() {
     fileTransfer.setOnProgress((_filename, transferred, total, sessionId) => {
       const store = useFileStore.getState()
       const existing = store.transfers.find((t) => t.sessionId === sessionId)
+      console.log('[onProgress]', { filename: _filename, transferred, total, sessionId, found: !!existing, existingId: existing?.id })
       if (existing) {
-        updateTransfer(existing.id, { transferred, state: transferred >= total ? 'complete' : 'transferring', timestamp: Date.now() })
+        const state = transferred >= total ? 'complete' : transferred > 0 ? 'transferring' : existing.state
+        updateTransfer(existing.id, { transferred, state, timestamp: Date.now() })
       }
     })
     fileTransfer.setOnDrop((sessionId, fromStation, frameType) => {
@@ -210,8 +233,8 @@ export function useDratsEngine() {
     })
     rpc.setOnPullSend((filename, size, station) => {
       const id = crypto.randomUUID()
-      addTransfer({ id, sessionId: -1, filename, size, transferred: 0, direction: 'send', state: 'transferring', station, timestamp: Date.now() })
-      return (sessionId) => updateTransfer(id, { sessionId })
+      addTransfer({ id, sessionId: -1, filename, size, transferred: 0, direction: 'send', state: 'negotiating', station, timestamp: Date.now() })
+      return (sessionId, compressedSize) => updateTransfer(id, { sessionId, state: 'awaiting-response', ...(compressedSize !== undefined ? { size: compressedSize } : {}) })
     })
     rpc.setOnPullSendError((filename, station, err) => {
       useEventStore.getState().addEvent({

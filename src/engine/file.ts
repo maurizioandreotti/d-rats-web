@@ -395,14 +395,12 @@ export class FileTransferEngine {
     onSessionId?: (sessionId: number, compressedSize: number) => void,
   ): Promise<number> {
     const sessionId = await this.sessionManager.startSession(SESSION_TYPE_FILEXFER, dest, filename)
-    onSessionId?.(sessionId, 0) // placeholder, will call again after compression
+    console.log('[sendFile] session established', { sessionId, dest, filename })
+    onSessionId?.(sessionId, 0)
 
-    // D-RATS compresses the whole file once with zlib, up front, then
-    // blindly slices the *compressed* stream into blocks — the offer's
-    // declared size and all windowed transport below operate on that
-    // compressed byte count, not the original file size.
     const compressed = await deflate(data)
     onSessionId?.(sessionId, compressed.byteLength)
+    console.log('[sendFile] compressed', { originalSize: data.byteLength, compressedSize: compressed.byteLength })
 
     const state: TransferState = {
       sessionId,
@@ -427,13 +425,16 @@ export class FileTransferEngine {
     new DataView(offer.buffer).setUint32(0, compressed.byteLength, true)
     offer.set(filenameBytes, 4)
 
+    console.log('[sendFile] sending offer', { sessionId })
     await this.sendReliable(state, [offer])
+    console.log('[sendFile] offer sent, waiting for response')
 
     const response = await this.waitForData(sessionId, FILE_OFFER_RESPONSE_TIMEOUT_MS)
     if (!response) {
       const cancelled = this.isCancelled(state)
       state.phase = 'failed'
       this.activeTransfers.delete(sessionId)
+      console.log('[sendFile] offer timeout/cancelled', { cancelled, sessionId })
       throw new Error(
         cancelled
           ? `File transfer to ${dest} was cancelled`
@@ -442,6 +443,7 @@ export class FileTransferEngine {
     }
 
     const text = new TextDecoder().decode(response)
+    console.log('[sendFile] offer response', { text, sessionId })
     let offset = 0
     if (text.startsWith('RESUME:')) {
       offset = parseInt(text.slice(7), 10) || 0
@@ -457,12 +459,14 @@ export class FileTransferEngine {
     for (let i = 0; i < remaining.length; i += FILE_BLOCK_SIZE) {
       chunks.push(remaining.slice(i, i + FILE_BLOCK_SIZE))
     }
+    console.log('[sendFile] starting data transfer', { chunks: chunks.length, sessionId })
 
     await this.sendReliable(state, chunks, (sentBytes) => {
       this.onProgress?.(filename, Math.min(offset + sentBytes, compressed.byteLength), compressed.byteLength, sessionId)
     })
 
     state.phase = 'complete'
+    console.log('[sendFile] data transfer complete', { sessionId })
     this.onProgress?.(filename, compressed.byteLength, compressed.byteLength, sessionId)
     await this.sessionManager.endSession(sessionId)
 

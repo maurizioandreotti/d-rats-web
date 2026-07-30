@@ -64,11 +64,15 @@ export function SharedFiles({ fileRef, station }: SharedFilesProps) {
       if (!data) throw new Error(`Could not read "${filename}" from the shared folder`)
 
       id = crypto.randomUUID()
-      // Create transfer with a placeholder sessionId; sendFile will update it via onSessionId callback
-      addTransfer({ id, sessionId: -1, filename: filename!, size: data.byteLength, transferred: 0, direction: 'send', state: 'transferring', station, timestamp: Date.now() })
+      useEventStore.getState().addEvent({
+        time: Date.now(),
+        text: `[File] Negotiating session with ${station} for "${filename!}"`,
+        type: 'frame',
+      })
+      addTransfer({ id, sessionId: -1, filename: filename!, size: data.byteLength, transferred: 0, direction: 'send', state: 'negotiating', station, timestamp: Date.now() })
       await fileRef.current.sendFile(filename!, data, station, (sessionId, compressedSize) => {
-        console.debug('[SharedFiles] sendFile onSessionId:', sessionId, 'compressedSize:', compressedSize, 'for transfer', id)
-        updateTransfer(id!, { sessionId, size: compressedSize })
+        console.log('[SharedFiles] onSessionId:', { sessionId, compressedSize, id })
+        updateTransfer(id!, { sessionId, size: compressedSize, state: 'awaiting-response' })
       })
     } catch (err) {
       if (id) updateTransfer(id, { state: 'error', timestamp: Date.now() })

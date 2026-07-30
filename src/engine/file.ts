@@ -34,6 +34,7 @@ interface TransferState {
   destStation: string
   filename: string
   totalSize: number
+  originalSize: number
   direction: 'send' | 'receive'
   phase: TransferPhase
   oseq: number
@@ -77,6 +78,7 @@ export class FileTransferEngine {
         destStation: sourceStation,
         filename: '',
         totalSize: 0,
+        originalSize: 0,
         direction: 'receive',
         phase: 'awaiting-offer',
         oseq: 0,
@@ -406,6 +408,7 @@ export class FileTransferEngine {
       destStation: dest,
       filename,
       totalSize: compressed.byteLength,
+      originalSize: data.byteLength,
       direction: 'send',
       phase: 'awaiting-response',
       oseq: 0,

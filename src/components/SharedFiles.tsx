@@ -66,9 +66,9 @@ export function SharedFiles({ fileRef, station }: SharedFilesProps) {
       id = crypto.randomUUID()
       // Create transfer with a placeholder sessionId; sendFile will update it via onSessionId callback
       addTransfer({ id, sessionId: -1, filename: filename!, size: data.byteLength, transferred: 0, direction: 'send', state: 'transferring', station, timestamp: Date.now() })
-      await fileRef.current.sendFile(filename!, data, station, (sessionId) => {
-        console.debug('[SharedFiles] sendFile onSessionId:', sessionId, 'for transfer', id)
-        updateTransfer(id!, { sessionId })
+      await fileRef.current.sendFile(filename!, data, station, (sessionId, compressedSize) => {
+        console.debug('[SharedFiles] sendFile onSessionId:', sessionId, 'compressedSize:', compressedSize, 'for transfer', id)
+        updateTransfer(id!, { sessionId, size: compressedSize })
       })
     } catch (err) {
       if (id) updateTransfer(id, { state: 'error', timestamp: Date.now() })

@@ -392,16 +392,17 @@ export class FileTransferEngine {
     filename: string,
     data: Uint8Array,
     dest: string,
-    onSessionId?: (sessionId: number) => void,
+    onSessionId?: (sessionId: number, compressedSize: number) => void,
   ): Promise<number> {
     const sessionId = await this.sessionManager.startSession(SESSION_TYPE_FILEXFER, dest, filename)
-    onSessionId?.(sessionId)
+    onSessionId?.(sessionId, 0) // placeholder, will call again after compression
 
     // D-RATS compresses the whole file once with zlib, up front, then
     // blindly slices the *compressed* stream into blocks — the offer's
     // declared size and all windowed transport below operate on that
     // compressed byte count, not the original file size.
     const compressed = await deflate(data)
+    onSessionId?.(sessionId, compressed.byteLength)
 
     const state: TransferState = {
       sessionId,

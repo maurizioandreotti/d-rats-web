@@ -4,6 +4,7 @@ import { usePortStore } from '../store/port-store'
 import { useConfigStore } from '../store/config-store'
 import { useStationStore } from '../store/station-store'
 import { useLocalFilesStore } from '../store/local-files-store'
+import { version } from '../../package.json'
 import { SerialConnect } from './SerialConnect'
 import { ChatPanel } from './ChatPanel'
 import { MapPanel } from './MapPanel'
@@ -130,7 +131,7 @@ export function Layout() {
         <main className="tab-content">{renderContent()}</main>
 
         <footer className="status-bar">
-          <span className="status-text">D-RATS Web v0.1.0</span>
+          <span className="status-text">D-RATS Web v{version}</span>
           {connectedCount > 0 ? (
             <span className="status-ports">
               <span className="status-dot online" />

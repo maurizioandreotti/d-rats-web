@@ -15,6 +15,7 @@ import { ConfigPanel } from './ConfigPanel'
 import { SnifferPanel } from './SnifferPanel'
 import { PingPanel } from './PingPanel'
 import { WikiPanel } from './WikiPanel'
+import { InfoPanel } from './InfoPanel'
 
 interface TabDef {
   id: string
@@ -31,6 +32,7 @@ const TABS: TabDef[] = [
   { id: 'sniffer', label: 'Sniffer' },
   { id: 'config', label: 'Config' },
   { id: 'wiki', label: 'Wiki' },
+  { id: 'info', label: 'Info' },
 ]
 
 export function Layout() {
@@ -97,6 +99,8 @@ export function Layout() {
         return <EventLog />
       case 'wiki':
         return <WikiPanel />
+      case 'info':
+        return <InfoPanel />
       case 'config':
         return <ConfigPanel />
       default:

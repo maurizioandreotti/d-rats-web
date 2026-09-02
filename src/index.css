@@ -87,3 +87,38 @@ code {
 button {
   font-family: var(--sans);
 }
+
+.info-panel {
+  max-width: 480px;
+  padding: 8px 0;
+}
+
+.info-row {
+  display: flex;
+  gap: 12px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.info-row:last-child {
+  border-bottom: none;
+}
+
+.info-label {
+  font-weight: 600;
+  color: var(--text-h);
+  min-width: 72px;
+}
+
+.info-value {
+  color: var(--text);
+}
+
+.info-value a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.info-value a:hover {
+  text-decoration: underline;
+}

@@ -5,6 +5,17 @@
 - [Technical Aspects](technical.md) — D-STAR RF layer vs serial data, Own Callsign 1/2, callsign suffixes (/P), ICOM GPS data format
 - [Troubleshooting](troubleshooting.md) — No data from radio, GPS positions not appearing, ping not getting response
 
+## Developer Docs
+
+- [Architecture](../architecture.md) — layered architecture, engine, stores, UI flows
+- [Protocols](../protocols.md) — DDT2, control, chat, file, RPC, GPS, ratflector wire formats
+- [API Reference](../api-reference.md) — symbol-level engine/store/hook/component API
+- [Development](../development.md) — setup, scripts, conventions
+- [Deployment](../deployment.md) — build, PWA install, static hosting, bridge
+- [Testing](../testing.md) — Vitest patterns & manual radio verification
+
+See also: [../README.md](../README.md) · [../../CONTRIBUTING.md](../../CONTRIBUTING.md) · [../../SECURITY.md](../../SECURITY.md)
+
 ## Quick Reference
 
 | Topic | Page |

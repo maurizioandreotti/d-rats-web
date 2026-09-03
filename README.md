@@ -45,6 +45,20 @@ You don't need your own server or localhost for this — any static host works, 
 - `registerType: 'autoUpdate'` is already configured, so installed copies pick up new deployments automatically next time they're online — no manual reinstall needed.
 - Nothing sensitive is exposed by public hosting: the app is 100% client-side, with no server secrets, and each user's config/callsign stays in their own browser's local storage only.
 
+## Documentation
+
+* [Architecture](docs/architecture.md) — layers (engine, stores, UI), PWA, data flows
+* [Protocols](docs/protocols.md) — DDT2, control, chat, file, RPC, GPS, ratflector wire formats
+* [API Reference](docs/api-reference.md) — engine, stores, hooks, components (with `file:line` cites)
+* [Development](docs/development.md) — setup, scripts, conventions
+* [Deployment](docs/deployment.md) — build, PWA install, static hosting, bridge
+* [Testing](docs/testing.md) — Vitest patterns & manual radio verification
+* [Wiki](docs/wiki/index.md) — features, radio setup, technical, troubleshooting
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md). For chronicling changes see [CHANGELOG.md](CHANGELOG.md).
+
 ## License
 
 GNU General Public License v3.0
